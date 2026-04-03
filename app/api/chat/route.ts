@@ -1,112 +1,77 @@
 import { NextRequest } from "next/server";
-
-const systemPrompt = `
-You are the AI Assist lead conversion assistant.
-
-Your job is to qualify website visitors, identify lost leads, and convert them into contacts.
-
-Rules:
-- Keep responses under 2 sentences
-- Always move the conversation forward
-- Ask one question per message
-- Be confident, not passive
-- Do not act like support
-
-Flow:
-1. Identify business type
-2. Identify if they miss calls or leads
-3. Highlight lost revenue
-4. Position AI Assist as solution
-5. Capture contact info
-
-Trigger for lead capture:
-- After 2–3 user messages
-- OR if user mentions business, leads, calls, or interest
-
-When triggered:
-- First acknowledge the business type or situation specifically
-- Then ask for contact info
-
-Example pattern:
-"Got it — service businesses like tile companies lose a lot of jobs and revenue when they can't answer calls.
-What's the best number or email to send you a quick breakdown?"
-
-Rules:
-- Keep acknowledgment under 1 sentence
-- Adjust tone to match business type (trades vs hospitality vs professional)
-- Keep language simple and natural - avoid corporate wording
-- For trades: use "jobs" and "revenue"
-- For hospitality: use "bookings" and "money"
-- Second sentence remains the contact ask
-
-Tone:
-- sharp
-- modern
-- direct
-- conversational
-
-Never end without a question.
-`;
+import { createDefaultMemory, updateEngagement, extractBusinessType, extractPainPoints } from "../../../lib/chat/memory.js";
+import { detectIntent } from "../../../lib/chat/intent.js";
+import { detectIndustry, PERSONALITIES } from "../../../lib/chat/personality.js";
+import { updateState, STATES } from "../../../lib/chat/state.js";
+import { buildSystemPrompt } from "../../../lib/chat/prompt.js";
 
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { messages, name, email, phone } = body;
+    const { messages, name, email, phone, memory: existingMemory } = body;
 
     // Use conversation history if provided, otherwise use single message
     const messageArray = Array.isArray(messages) ? messages : [{ role: "user", content: body.message || "" }];
     const latestUserMessage = messageArray[messageArray.length - 1]?.content || "";
 
-    // Hard lead capture trigger logic
-    const userMessageCount = messageArray.filter((m) => m.role === "user").length;
-
-    const shouldForceCapture =
-      userMessageCount >= 2 ||
-      /business|company|clients|leads|calls|appointments|service|owner|book|booking|missed call|follow-up/i.test(latestUserMessage);
-
-    // Build OpenAI messages with system prompt and optional capture instruction
-    let openaiMessages = [
-      { role: "system", content: systemPrompt }
-    ];
-
-    // Add capture instruction if triggered
-    if (shouldForceCapture) {
-      openaiMessages.push({
-        role: "system",
-        content: `
-The user is qualified.
-
-You MUST ask for their phone number or email in your next response.
-
-Do not continue general conversation.
-Do not explain the product further.
-Do not ask unrelated questions.
-
-Your next message should move directly to collecting contact information.
-`
-      });
-    }
-
-    // Add conversation history
-    openaiMessages = openaiMessages.concat(messageArray);
-
     if (!latestUserMessage || typeof latestUserMessage !== "string") {
       return Response.json({ error: "Message is required" }, { status: 400 });
     }
+
+    // Initialize or update memory
+    let memory = existingMemory || createDefaultMemory();
+    
+    // Update memory with new information
+    memory.businessType = extractBusinessType(latestUserMessage, memory.businessType);
+    memory.painPoints = extractPainPoints(latestUserMessage, memory.painPoints);
+    memory = updateEngagement(memory, latestUserMessage);
+    
+    // Detect intent and industry
+    const intent = detectIntent(latestUserMessage);
+    const industry = detectIndustry(latestUserMessage);
+    memory.industry = industry.name;
+    
+    // Update conversation state
+    memory.state = updateState(memory, intent);
+    
+    // Check if contact was provided in this message
+    const contactProvided = /\b(\+?\d{7,}|\S+@\S+\.\S+)\b/.test(latestUserMessage);
+    if (contactProvided) {
+      memory.contactProvided = true;
+      memory.qualified = true;
+    }
+    
+    // Add topic to conversation history
+    if (intent.type !== 'general') {
+      memory.conversationTopics.push(intent.type);
+    }
+
+    // Build dynamic system prompt
+    const systemPrompt = buildSystemPrompt(memory, industry);
+
+    // Build OpenAI messages
+    const openaiMessages = [
+      { role: "system", content: systemPrompt },
+      ...messageArray
+    ];
 
     // Log debug info
     console.log("[DEBUG] OPENAI_API_KEY exists:", !!process.env.OPENAI_API_KEY);
     console.log("[DEBUG] GOOGLE_SHEET_WEBHOOK_URL exists:", !!process.env.GOOGLE_SHEET_WEBHOOK_URL);
     console.log("[DEBUG] Latest user message:", latestUserMessage);
     console.log("[DEBUG] Message history length:", messageArray.length);
+    console.log("[DEBUG] Conversation state:", memory.state);
+    console.log("[DEBUG] Engagement level:", memory.engagementLevel);
+    console.log("[DEBUG] Intent detected:", intent.type);
 
     // Check for OpenAI API key
     if (!process.env.OPENAI_API_KEY) {
       console.error("OpenAI API key is missing");
       return Response.json({ 
-        reply: "Thanks for reaching out — AI Assist helps businesses capture leads, answer FAQs, and book appointments automatically. Want a quick demo?",
+        reply: "I'm here to help you capture and convert more leads automatically. What kind of business do you run?",
         wants_booking: "yes",
-        needs_human: "no"
+        needs_human: "no",
+        memory
       }, { status: 200 });
     }
 
@@ -120,8 +85,8 @@ Your next message should move directly to collecting contact information.
       body: JSON.stringify({
         model: "gpt-4o-mini",
         messages: openaiMessages,
-        max_tokens: 100,
-        temperature: 0.6,
+        max_tokens: 150,
+        temperature: 0.7,
       }),
     });
 
@@ -131,21 +96,19 @@ Your next message should move directly to collecting contact information.
       return Response.json({ 
         reply: "Something went wrong — try again in a moment.",
         wants_booking: "no",
-        needs_human: "yes"
+        needs_human: "yes",
+        memory
       }, { status: 500 });
     }
 
     const openaiData = await openaiResponse.json();
     console.log("[DEBUG] OpenAI reply generated:", !!openaiData.choices?.[0]?.message?.content);
 
-    const reply = openaiData.choices[0]?.message?.content || "I'm here to help you capture and convert more leads automatically. Do you run a business?";
+    const reply = openaiData.choices[0]?.message?.content || "I'm here to help you capture and convert more leads automatically. What kind of business do you run?";
 
     // Infer booking intent and human request from latest user message
     const wants_booking = /\b(demo|book|schedule|appointment|interested|ready|sign up)\b/i.test(latestUserMessage) ? "yes" : "no";
     const needs_human = /\b(human|person|agent|representative|speak to someone)\b/i.test(latestUserMessage) ? "yes" : "no";
-
-    // Add contact detection
-    const contactProvided = /\b(\+?\d{7,}|\S+@\S+\.\S+)\b/.test(latestUserMessage);
 
     console.log("[DEBUG] Inferred wants_booking:", wants_booking, "needs_human:", needs_human, "contactProvided:", contactProvided);
 
@@ -162,7 +125,11 @@ Your next message should move directly to collecting contact information.
           ai_reply: reply,
           wants_booking,
           needs_human,
-          status: contactProvided ? "captured" : "new"
+          status: contactProvided ? "captured" : "new",
+          conversation_state: memory.state,
+          engagement_level: memory.engagementLevel,
+          business_type: memory.businessType,
+          pain_points: memory.painPoints.join(', ') || 'none'
         };
         
         console.log("[DEBUG] Sending webhook payload:", JSON.stringify(webhookPayload, null, 2));
@@ -190,7 +157,8 @@ Your next message should move directly to collecting contact information.
     return Response.json({
       reply,
       wants_booking,
-      needs_human
+      needs_human,
+      memory
     });
 
   } catch (error) {
@@ -198,7 +166,8 @@ Your next message should move directly to collecting contact information.
     return Response.json({ 
       reply: "Something went wrong — try again in a moment.",
       wants_booking: "no",
-      needs_human: "yes"
+      needs_human: "yes",
+      memory: createDefaultMemory()
     }, { status: 500 });
   }
 }

@@ -11,9 +11,10 @@ export default function ChatWidget() {
     {
       role: "assistant",
       content:
-        "Hi — I’m the AI Assist lead recovery assistant. Want help capturing and following up with missed leads automatically?",
+        "Hi there! I'm here to help you understand how AI Assist can support your business. What kind of business do you run?",
     },
   ]);
+  const [memory, setMemory] = useState(null);
 
   const endRef = useRef(null);
 
@@ -48,6 +49,7 @@ export default function ChatWidget() {
         body: JSON.stringify({
           message: trimmed,
           messages: nextMessages,
+          memory: memory,
         }),
       });
 
@@ -57,13 +59,18 @@ export default function ChatWidget() {
 
       const data = await res.json();
 
+      // Update memory if returned
+      if (data.memory) {
+        setMemory(data.memory);
+      }
+
       setMessages((prev) => [
         ...prev,
         {
           role: "assistant",
           content:
             data?.reply ||
-            "Thanks — I’m here, but I hit a response issue. Please try again in a moment.",
+            "Thanks — I'm here, but I hit a response issue. Please try again in a moment.",
         },
       ]);
     } catch (error) {
@@ -88,7 +95,7 @@ export default function ChatWidget() {
             <div>
               <h3 className="text-sm font-semibold text-white">AI Assist</h3>
               <p className="text-xs text-cyan-300/80">
-                Lead Recovery Assistant
+                Business Growth Assistant
               </p>
             </div>
 
