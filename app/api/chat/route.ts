@@ -129,18 +129,18 @@ function updateScores(session: Session, intent: Intent): void {
 }
 
 function transition(session: Session, intent: Intent): void {
-  const { state, engagementLevel, painPoints, businessType, trustScore, objections } = session;
+  const { state, engagementLevel, painPoints, businessType } = session;
 
   const map: Record<State, () => State> = {
-    discovery: () => (businessType || intent.type === "business_context" || engagementLevel >= 2) ? "problem_awareness" : "discovery",
-    problem_awareness: () => (painPoints.length >= 1 || engagementLevel >= 4) ? "education" : "problem_awareness",
-    education: () => {
-      if (intent.sentiment === "positive") return "consideration";
-      if (engagementLevel >= 6) return "value_realization";
-      return "education";
+    discovery: () => {
+      if (businessType && painPoints.length >= 1) return "consideration";
+      if (businessType || painPoints.length >= 1 || engagementLevel >= 2) return "problem_awareness";
+      return "discovery";
     },
+    problem_awareness: () => (painPoints.length >= 1 || engagementLevel >= 4) ? "education" : "problem_awareness",
+    education: () => intent.sentiment === "positive" ? "consideration" : "education",
     value_realization: () => "consideration",
-    consideration: () => (intent.sentiment === "positive") ? "conversion" : "consideration",
+    consideration: () => intent.sentiment === "positive" ? "conversion" : "consideration",
     conversion: () => "conversion",
   };
 
@@ -170,12 +170,12 @@ function stageContext(session: Session): string {
     : "";
 
   const stages: Record<State, string> = {
-    discovery: `You're learning about them. One good question only if needed. ${recentQ}`,
-    problem_awareness: `You understand their situation. Briefly reflect it back and signal that you can help. Move forward. ${recentQ}`,
-    education: `Give them just enough to understand the value—1-2 sentences max. Don't over-explain. Leave room for them to want more.`,
-    value_realization: `They're connecting the dots. Affirm briefly and move toward next steps.`,
-    consideration: `They're interested. Stop explaining. Ask for their name and best number or email to get them connected with the right person on the team. One natural ask.`,
-    conversion: `They're ready. Your only job now is to collect their name and contact info (phone or email) to book the next step. Don't pitch anything else. Just get the details and confirm someone will reach out.`,
+    discovery: `You're learning about them. Ask one question to understand their business and main challenge—but only if they haven't already told you. If they already told you their business type and problem, skip this and move forward.`,
+    problem_awareness: `You know their situation. Reflect it back briefly and signal you can help. Do NOT ask them to repeat what they already said.`,
+    education: `Give them 1-2 sentences on how AI can solve their specific problem. Don't over-explain. Create curiosity, not a lecture.`,
+    value_realization: `They're connecting the dots. Affirm briefly and move toward booking.`,
+    consideration: `They're interested. Stop explaining. Ask for their name and best phone number or email so the team can follow up. One natural ask.`,
+    conversion: `Your only job: collect name and contact info (phone or email) if you don't have it yet. If you have it, confirm someone will reach out shortly. Nothing else.`,
   };
 
   const painLine = painPoints.length ? `\nKnown pain points: ${painPoints.join(", ")}. Weave in only where genuinely relevant.` : "";
