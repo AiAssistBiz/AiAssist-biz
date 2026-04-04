@@ -132,15 +132,15 @@ function transition(session: Session, intent: Intent): void {
   const { state, engagementLevel, painPoints, businessType, trustScore, objections } = session;
 
   const map: Record<State, () => State> = {
-    discovery: () => (businessType || intent.type === "business_context" || engagementLevel >= 3) ? "problem_awareness" : "discovery",
-    problem_awareness: () => (painPoints.length >= 1 && engagementLevel >= 5) || intent.type === "how_it_works" ? "education" : "problem_awareness",
+    discovery: () => (businessType || intent.type === "business_context" || engagementLevel >= 2) ? "problem_awareness" : "discovery",
+    problem_awareness: () => (painPoints.length >= 1 || engagementLevel >= 4) ? "education" : "problem_awareness",
     education: () => {
-      if (engagementLevel >= 8 && trustScore >= 2) return "value_realization";
-      if (intent.type === "pricing" && engagementLevel >= 6) return "consideration";
+      if (intent.sentiment === "positive") return "consideration";
+      if (engagementLevel >= 6) return "value_realization";
       return "education";
     },
-    value_realization: () => (intent.type === "pricing" || intent.sentiment === "positive") ? "consideration" : "value_realization",
-    consideration: () => (objections.length === 0 && trustScore >= 4 && intent.sentiment === "positive") ? "conversion" : "consideration",
+    value_realization: () => "consideration",
+    consideration: () => (intent.sentiment === "positive") ? "conversion" : "consideration",
     conversion: () => "conversion",
   };
 
@@ -170,12 +170,12 @@ function stageContext(session: Session): string {
     : "";
 
   const stages: Record<State, string> = {
-    discovery: `You're in early conversation. Be curious and observant. If you ask something, make it one good question—but only if it flows naturally. ${recentQ}`,
-    problem_awareness: `You have some context on them. Reflect, go deeper. You're trying to understand the full picture before offering anything. ${recentQ}`,
-    education: `You can start connecting what you know about them to what's possible. Use framing and examples—not feature lists. ${alreadyCovered}`,
-    value_realization: `Help them arrive at their own insight about the cost of staying stuck. Guide, don't lecture.`,
-    consideration: `They're interested. Be direct and calm.${objections.length ? ` They've expressed hesitation around: ${objections.join(", ")}—address naturally, not defensively.` : ""} Start moving toward a next step and naturally ask for their name and best contact (email or phone) so someone can follow up.`,
-    conversion: `They're ready. Ask for their name and best email or phone number to lock in the next step. Keep it casual and natural—just one easy ask, like a human would do it.`,
+    discovery: `You're learning about them. One good question only if needed. ${recentQ}`,
+    problem_awareness: `You understand their situation. Briefly reflect it back and signal that you can help. Move forward. ${recentQ}`,
+    education: `Give them just enough to understand the value—1-2 sentences max. Don't over-explain. Leave room for them to want more.`,
+    value_realization: `They're connecting the dots. Affirm briefly and move toward next steps.`,
+    consideration: `They're interested. Stop explaining. Ask for their name and best number or email to get them connected with the right person on the team. One natural ask.`,
+    conversion: `They're ready. Your only job now is to collect their name and contact info (phone or email) to book the next step. Don't pitch anything else. Just get the details and confirm someone will reach out.`,
   };
 
   const painLine = painPoints.length ? `\nKnown pain points: ${painPoints.join(", ")}. Weave in only where genuinely relevant.` : "";
