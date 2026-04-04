@@ -68,8 +68,8 @@ function detectIntent(msg: string): Intent {
 }
 
 function scoreSentiment(t: string): Sentiment {
-  const p = (t.match(/\b(great|love|yes|definitely|interested|perfect|exactly|excited|sounds good|absolutely)\b/g) || []).length;
-  const n = (t.match(/\b(no\b|not\b|don't|bad|hate|doubt|skeptical|tried|waste|expensive|annoyed|problem|issue)\b/g) || []).length;
+  const p = (t.match(/\b(great|love|yes|yeah|yep|yup|definitely|interested|perfect|exactly|excited|sounds good|absolutely|sure|ok\b|okay|works|monday|tuesday|wednesday|thursday|friday|anytime|let's|lets|go ahead|do it|sign me|set it|book|schedule|ready|please)\b/g) || []).length;
+  const n = (t.match(/\b(no\b|not\b|don't|bad|hate|doubt|skeptical|tried|waste|expensive|annoyed|problem|issue|cancel|stop|nevermind)\b/g) || []).length;
   return p > n ? "positive" : n > p ? "negative" : "neutral";
 }
 
@@ -131,6 +131,9 @@ function updateScores(session: Session, intent: Intent): void {
 function transition(session: Session, intent: Intent): void {
   const { state, engagementLevel, painPoints, businessType } = session;
 
+  const stateOrder: State[] = ["discovery", "problem_awareness", "education", "value_realization", "consideration", "conversion"];
+  const currentIndex = stateOrder.indexOf(state);
+
   const map: Record<State, () => State> = {
     discovery: () => {
       if (businessType && painPoints.length >= 1) return "consideration";
@@ -144,7 +147,9 @@ function transition(session: Session, intent: Intent): void {
     conversion: () => "conversion",
   };
 
-  session.state = (map[state] ?? (() => state))();
+  const next = (map[state] ?? (() => state))();
+  const nextIndex = stateOrder.indexOf(next);
+  session.state = nextIndex >= currentIndex ? next : state;
 }
 
 function tone(businessType: string | null): string {
@@ -277,12 +282,15 @@ export async function POST(req: Request) {
       sessionId,
       ...contact,
       businessType: session.businessType,
-      painPoints: session.painPoints,
+      painPoints: session.painPoints.join(", "),
       state: session.state,
       engagementLevel: session.engagementLevel,
       trustScore: session.trustScore,
       messageCount: session.messageCount,
+      wantsCall: session.state === "conversion" || session.state === "consideration" ? "yes" : "no",
+      needsHuman: session.state === "conversion" ? "yes" : "no",
       triggerType: hasContact ? "contact_provided" : session.state,
+      lastMessage: message,
     });
 
     session.history.push({ role: "user", content: message });
