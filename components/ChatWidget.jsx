@@ -3,6 +3,16 @@
 import { useEffect, useRef, useState } from "react";
 import { MessageCircle, Send, X } from "lucide-react";
 
+function getSessionId() {
+  if (typeof window === "undefined") return "";
+  let id = sessionStorage.getItem("chat_session_id");
+  if (!id) {
+    id = crypto.randomUUID();
+    sessionStorage.setItem("chat_session_id", id);
+  }
+  return id;
+}
+
 export default function ChatWidget() {
   const [open, setOpen] = useState(false);
   const [input, setInput] = useState("");
@@ -14,8 +24,8 @@ export default function ChatWidget() {
         "Hi there! I'm here to help you understand how AI Assist can support your business. What kind of business do you run?",
     },
   ]);
-  const [memory, setMemory] = useState(null);
 
+  const sessionId = useRef(getSessionId());
   const endRef = useRef(null);
 
   useEffect(() => {
@@ -30,39 +40,23 @@ export default function ChatWidget() {
     const trimmed = input.trim();
     if (!trimmed || loading) return;
 
-    const userMessage = {
-      role: "user",
-      content: trimmed,
-    };
-
-    const nextMessages = [...messages, userMessage];
-    setMessages(nextMessages);
+    setMessages((prev) => [...prev, { role: "user", content: trimmed }]);
     setInput("");
     setLoading(true);
 
     try {
       const res = await fetch("/api/chat", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           message: trimmed,
-          messages: nextMessages,
-          memory: memory,
+          sessionId: sessionId.current,
         }),
       });
 
-      if (!res.ok) {
-        throw new Error("Request failed");
-      }
+      if (!res.ok) throw new Error("Request failed");
 
       const data = await res.json();
-
-      // Update memory if returned
-      if (data.memory) {
-        setMemory(data.memory);
-      }
 
       setMessages((prev) => [
         ...prev,
@@ -73,7 +67,7 @@ export default function ChatWidget() {
             "Thanks — I'm here, but I hit a response issue. Please try again in a moment.",
         },
       ]);
-    } catch (error) {
+    } catch {
       setMessages((prev) => [
         ...prev,
         {
