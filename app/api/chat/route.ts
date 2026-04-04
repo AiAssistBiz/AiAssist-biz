@@ -77,10 +77,12 @@ function extractContext(msg: string, session: Session): void {
   const t = msg.toLowerCase();
 
   if (!session.businessType) {
-    if (/\b(medspa|med spa|aesthetic|botox|filler|laser|skin|beauty|wellness|cosmetic|clinic)\b/.test(t)) session.businessType = "medspa";
-    else if (/\b(plumb|hvac|electric|roofing|landscap|cleaning|pest|handyman|contractor|remodel|painting)\b/.test(t)) session.businessType = "home_services";
-    else if (/\b(restaurant|cafe|food|dining|catering)\b/.test(t)) session.businessType = "restaurant";
-    else if (/\b(dental|dentist|orthodont|chiro|physio|therapy|medical)\b/.test(t)) session.businessType = "healthcare";
+    if (/\b(medspa|med spa|aesthetic|botox|filler|laser|skin care|beauty|wellness|cosmetic|clinic)\b/.test(t)) session.businessType = "medspa";
+    else if (/\b(plumb|plumber|hvac|electrician|electric|roofing|roofer|landscap|lawn|cleaning|pest|handyman|contractor|remodel|painting|painter|carpenter|flooring|gutters?|siding|windows?|doors?|garage)\b/.test(t)) session.businessType = "home_services";
+    else if (/\b(restaurant|cafe|food|dining|catering|bar\b|bakery)\b/.test(t)) session.businessType = "restaurant";
+    else if (/\b(dental|dentist|orthodont|chiro|physio|therapy|therapist|medical|doctor|urgent care|pharmacy)\b/.test(t)) session.businessType = "healthcare";
+    else if (/\b(salon|barber|barbershop|nail|lash|spa\b|massage|wax)\b/.test(t)) session.businessType = "beauty";
+    else if (/\b(real estate|realtor|broker|property|mortgage|rental)\b/.test(t)) session.businessType = "real_estate";
   }
 
   const pains: [RegExp, string][] = [
@@ -148,9 +150,11 @@ function transition(session: Session, intent: Intent): void {
 function tone(businessType: string | null): string {
   const tones: Record<string, string> = {
     medspa: "Your tone is warm, unhurried, and concierge-level attentive. These clients value discretion and feeling truly understood. Never clinical, never sales-y.",
-    home_services: "Be direct, grounded, and practical. These are busy people who respect straight answers and no fluff. Sound like someone who knows the trade.",
+    home_services: "Be direct, practical, and confident. These are busy tradespeople and service owners who respect straight talk and actionable advice. Cut to what matters fast.",
     restaurant: "Be personable and energetic. These owners are passionate about their craft. Match their energy—practical but enthusiastic.",
     healthcare: "Be calm, professional, and empathetic. Practitioners are cautious. Lead with trust and specificity, not enthusiasm.",
+    beauty: "Be warm, personable, and relatable. These owners care deeply about their client relationships. Speak to the human side of their business.",
+    real_estate: "Be sharp and results-oriented. These are high-velocity professionals who value speed and clarity. Get to the point.",
   };
   return (businessType && tones[businessType]) || "You're sharp, warm, and genuinely curious. You speak like a trusted advisor—confident without being pushy, interested without being eager.";
 }
@@ -189,7 +193,7 @@ function buildPrompt(session: Session): string {
     : "";
 
   return [
-    `You are a senior-level AI assistant for a company that helps local businesses grow through AI-powered automation. You handle inbound conversations with the instincts of a skilled human operator—not a bot.`,
+    `You are a senior-level AI assistant for a company that helps local businesses grow through AI-powered automation. You handle inbound conversations with the instincts of a skilled human sales operator—not a bot.`,
     ``,
     tone(session.businessType),
     ``,
@@ -197,16 +201,15 @@ function buildPrompt(session: Session): string {
     stageContext(session),
     trustLine,
     ``,
-    `How you sound:`,
-    `- Write like a thoughtful person, not an assistant. Vary your rhythm and structure.`,
-    `- Some responses are statements. Some are questions. Some are both. Mix it naturally.`,
-    `- Never open with filler: no "Absolutely!", "Great question!", "Of course!", "Certainly!", "That's a great point!"`,
-    `- Don't repeat ideas you've already expressed. Don't rephrase the same value proposition.`,
-    `- Build on what the user said—reference specifics when possible.`,
-    `- When you do ask a question, ask only one. Make it count.`,
-    `- If they're skeptical or guarded, slow down and acknowledge before anything else.`,
-    `- 2–4 sentences is the target. Occasionally a single sentence is fine.`,
-    `- Each response should move the conversation forward slightly—avoid staying at the same level for multiple turns.`,
+    `Critical rules:`,
+    `- You already know their business type and pain points from the conversation. Use that context in every response. Never ask them to repeat what they've already told you.`,
+    `- Once you know their problem, start offering direction and solutions—don't keep probing with more questions.`,
+    `- A question should only appear when you genuinely need new information. Otherwise, lead with insight or a next step.`,
+    `- Never open with filler: no "Absolutely!", "Great question!", "Of course!", "Certainly!"`,
+    `- Vary your rhythm. Some responses are statements. Some end in a soft question. Not every response needs one.`,
+    `- 2–4 sentences. Occasionally one sentence is fine.`,
+    `- Each response should move the conversation forward. Don't linger at the same conversational level.`,
+    `- Sound like a knowledgeable human who's genuinely trying to help—not an assistant following a script.`,
   ].filter(Boolean).join("\n");
 }
 
@@ -226,14 +229,20 @@ function isConversionSignal(session: Session, intent: Intent): boolean {
 }
 
 async function fireWebhook(data: Record<string, unknown>): Promise<void> {
-  if (!process.env.GOOGLE_SHEETS_WEBHOOK_URL) return;
+  if (!process.env.GOOGLE_SHEETS_WEBHOOK_URL) {
+    console.warn("[webhook] GOOGLE_SHEETS_WEBHOOK_URL not set");
+    return;
+  }
   try {
-    await fetch(process.env.GOOGLE_SHEETS_WEBHOOK_URL, {
+    const res = await fetch(process.env.GOOGLE_SHEETS_WEBHOOK_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ...data, timestamp: new Date().toISOString(), source: "ai-chat" }),
     });
-  } catch {}
+    console.log("[webhook] status:", res.status);
+  } catch (err) {
+    console.error("[webhook] failed:", err);
+  }
 }
 
 function extractQuestion(text: string): string | null {
