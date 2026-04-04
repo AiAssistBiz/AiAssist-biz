@@ -170,8 +170,8 @@ function stageContext(session: Session): string {
     problem_awareness: `You have some context on them. Reflect, go deeper. You're trying to understand the full picture before offering anything. ${recentQ}`,
     education: `You can start connecting what you know about them to what's possible. Use framing and examples—not feature lists. ${alreadyCovered}`,
     value_realization: `Help them arrive at their own insight about the cost of staying stuck. Guide, don't lecture.`,
-    consideration: `They're interested. Be direct and calm.${objections.length ? ` They've expressed hesitation around: ${objections.join(", ")}—address naturally, not defensively.` : ""} A soft next step is all that's needed.`,
-    conversion: `They're ready. Naturally ask for their name and best email or phone number to lock in the next step. One easy, human ask—not a form, just a natural handoff. If you already have their contact info, confirm the next step instead.`,
+    consideration: `They're interested. Be direct and calm.${objections.length ? ` They've expressed hesitation around: ${objections.join(", ")}—address naturally, not defensively.` : ""} Start moving toward a next step and naturally ask for their name and best contact (email or phone) so someone can follow up.`,
+    conversion: `They're ready. Ask for their name and best email or phone number to lock in the next step. Keep it casual and natural—just one easy ask, like a human would do it.`,
   };
 
   const painLine = painPoints.length ? `\nKnown pain points: ${painPoints.join(", ")}. Weave in only where genuinely relevant.` : "";
@@ -259,19 +259,17 @@ export async function POST(req: Request) {
     const contact = detectContact(message);
     const hasContact = contact.email || contact.phone;
 
-    if (hasContact || isConversionSignal(session, intent)) {
-      await fireWebhook({
-        sessionId,
-        ...contact,
-        businessType: session.businessType,
-        painPoints: session.painPoints,
-        state: session.state,
-        engagementLevel: session.engagementLevel,
-        trustScore: session.trustScore,
-        messageCount: session.messageCount,
-        triggerType: hasContact ? "contact_provided" : "engagement_signal",
-      });
-    }
+    await fireWebhook({
+      sessionId,
+      ...contact,
+      businessType: session.businessType,
+      painPoints: session.painPoints,
+      state: session.state,
+      engagementLevel: session.engagementLevel,
+      trustScore: session.trustScore,
+      messageCount: session.messageCount,
+      triggerType: hasContact ? "contact_provided" : session.state,
+    });
 
     session.history.push({ role: "user", content: message });
     if (session.history.length > 24) session.history = session.history.slice(-24);
