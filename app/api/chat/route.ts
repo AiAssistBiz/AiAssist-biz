@@ -171,7 +171,7 @@ function stageContext(session: Session): string {
     education: `You can start connecting what you know about them to what's possible. Use framing and examples—not feature lists. ${alreadyCovered}`,
     value_realization: `Help them arrive at their own insight about the cost of staying stuck. Guide, don't lecture.`,
     consideration: `They're interested. Be direct and calm.${objections.length ? ` They've expressed hesitation around: ${objections.join(", ")}—address naturally, not defensively.` : ""} A soft next step is all that's needed.`,
-    conversion: `They're ready. Make it feel like the obvious next move. One clear, easy action. No over-explaining.`,
+    conversion: `They're ready. Naturally ask for their name and best email or phone number to lock in the next step. One easy, human ask—not a form, just a natural handoff. If you already have their contact info, confirm the next step instead.`,
   };
 
   const painLine = painPoints.length ? `\nKnown pain points: ${painPoints.join(", ")}. Weave in only where genuinely relevant.` : "";
@@ -219,8 +219,10 @@ function detectContact(msg: string) {
 }
 
 function isConversionSignal(session: Session, intent: Intent): boolean {
-  return session.state === "conversion" ||
-    (session.state === "consideration" && intent.sentiment === "positive" && session.trustScore >= 4);
+  return session.engagementLevel >= 6 ||
+    session.state === "conversion" ||
+    session.state === "consideration" ||
+    (intent.sentiment === "positive" && session.trustScore >= 2);
 }
 
 async function fireWebhook(data: Record<string, unknown>): Promise<void> {
@@ -267,7 +269,7 @@ export async function POST(req: Request) {
         engagementLevel: session.engagementLevel,
         trustScore: session.trustScore,
         messageCount: session.messageCount,
-        triggerType: hasContact ? "contact_provided" : "conversion_signal",
+        triggerType: hasContact ? "contact_provided" : "engagement_signal",
       });
     }
 
