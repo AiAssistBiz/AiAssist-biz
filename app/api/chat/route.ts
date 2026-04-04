@@ -5,13 +5,24 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 const SESSION_TTL = 30 * 60 * 1000;
 
-type State = "discovery" | "problem_awareness" | "education" | "consideration" | "conversion";
+type State = "discovery" | "problem_awareness" | "education" | "consideration" | "booking" | "contact_capture" | "conversion";
 type Sentiment = "positive" | "negative" | "neutral";
 type IntentType = "pricing" | "how_it_works" | "business_context" | "browsing" | "booking" | "general";
+type AssistantAction =
+  | "asked_business_type"
+  | "asked_pain_points"
+  | "asked_booking_interest"
+  | "offered_call"
+  | "asked_time_preference"
+  | "asked_contact_details"
+  | "proposed_time"
+  | "confirmed_booking"
+  | "general";
 
 interface Intent {
   type: IntentType;
   sentiment: Sentiment;
+  isAffirmative: boolean;
   bookingIntent: boolean;
   flexibleAvailability: boolean;
   availabilityMentioned: string | null;
@@ -29,10 +40,12 @@ interface Session {
   objections: string[];
   topicsRaised: string[];
   questionsAsked: string[];
+  lastAssistantAction: AssistantAction;
+  availabilityMentioned: string | null;
+  contactCollected: { name: string | null; email: string | null; phone: string | null };
   engagementLevel: number;
   trustScore: number;
   messageCount: number;
-  availabilityMentioned: string | null;
   history: Message[];
   lastActive: number;
 }
@@ -54,23 +67,53 @@ function createSession(): Session {
     objections: [],
     topicsRaised: [],
     questionsAsked: [],
+    lastAssistantAction: "general",
+    availabilityMentioned: null,
+    contactCollected: { name: null, email: null, phone: null },
     engagementLevel: 0,
     trustScore: 0,
     messageCount: 0,
-    availabilityMentioned: null,
     history: [],
     lastActive: Date.now(),
   };
 }
 
-function detectIntent(msg: string): Intent {
-  const t = msg.toLowerCase();
+function normalizeInput(msg: string): string {
+  return msg
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .replace(/(.)\1{2,}/g, "$1$1")
+    .replace(/\bye+s?\b/g, "yes")
+    .replace(/\bya+\b/g, "yeah")
+    .replace(/\byup+\b/g, "yup")
+    .replace(/\bsure+\b/g, "sure")
+    .replace(/\bokay+\b/g, "okay")
+    .replace(/ye\s+s\b/g, "yes")
+    .replace(/ye\s+splease/g, "yes please")
+    .trim();
+}
 
-  const bookingSignals = /\b(yes lets?|let'?s do (it|monday|tuesday|wednesday|thursday|friday|this|that)|book (it|me|a call)|schedule (a call|me|it|this)|call me|set (it|me) up|monday|tuesday|wednesday|thursday|friday|sign me up|i'?m in|let'?s go|do it|i'?m ready|set up a call|get started)\b/;
-  const flexibleSignals = /\b(anytime|any time|whenever|open all day|flexible|doesn'?t matter|either|whatever works|any day|all day)\b/;
+function detectIntent(msg: string, session: Session): Intent {
+  const raw = msg.toLowerCase();
+  const t = normalizeInput(msg);
+
+  const affirmativePatterns = /^(yes|yeah|yep|yup|sure|okay|ok|absolutely|definitely|sounds good|let'?s do it|let'?s go|do it|i'?m in|please|yes please|of course|go ahead|that works|perfect|great|cool|alright|for sure)\b/;
+  const bookingSignals = /\b(book (it|me|a call|a time)|schedule (a call|me|it)|call me|set (it|me) up|sign me up|get started|let'?s talk|set up a call|i'?m ready to (talk|start|book)|yes lets?|let'?s do (monday|tuesday|wednesday|thursday|friday|this|that))\b/;
+  const flexibleSignals = /\b(anytime|any time|whenever|open all day|flexible|doesn'?t matter|whatever works|any day|all day|open)\b/;
   const dayPattern = /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/;
 
-  const bookingIntent = bookingSignals.test(t);
+  const isAffirmative = affirmativePatterns.test(t) || (t.length < 20 && /\b(yes|yeah|yep|yup|sure|ok|okay|please|do it)\b/.test(t));
+
+  const contextualBookingIntent =
+    isAffirmative &&
+    (session.lastAssistantAction === "asked_booking_interest" ||
+      session.lastAssistantAction === "offered_call" ||
+      session.lastAssistantAction === "asked_time_preference" ||
+      session.lastAssistantAction === "proposed_time");
+
+  const explicitBookingIntent = bookingSignals.test(t) || bookingSignals.test(raw);
+  const bookingIntent = contextualBookingIntent || explicitBookingIntent;
+
   const flexibleAvailability = flexibleSignals.test(t);
   const dayMatch = t.match(dayPattern);
   const availabilityMentioned = dayMatch ? dayMatch[0] : null;
@@ -82,17 +125,24 @@ function detectIntent(msg: string): Intent {
   else if (/\b(my (business|company|clinic|spa|salon|shop|team|store)|we (are|have|run|do)|our (clients?|customers?|team)|i (own|have|run|operate) a)\b/.test(t)) type = "business_context";
   else if (/\b(just (looking|curious|wondering)|not sure|maybe|thinking about|comparing|researching)\b/.test(t)) type = "browsing";
 
-  return { type, sentiment: scoreSentiment(t), bookingIntent, flexibleAvailability, availabilityMentioned };
+  return {
+    type,
+    sentiment: scoreSentiment(t),
+    isAffirmative,
+    bookingIntent,
+    flexibleAvailability,
+    availabilityMentioned,
+  };
 }
 
 function scoreSentiment(t: string): Sentiment {
-  const p = (t.match(/\b(great|love|yes|yeah|yep|yup|definitely|interested|perfect|exactly|excited|sounds good|absolutely|sure|ok\b|okay|works|monday|tuesday|wednesday|thursday|friday|anytime|let'?s|lets|go ahead|do it|sign me|set it|book|schedule|ready|please|i'?m in)\b/g) || []).length;
+  const p = (t.match(/\b(great|love|yes|yeah|yep|yup|definitely|interested|perfect|exactly|excited|sounds good|absolutely|sure|okay|ok\b|works|monday|tuesday|wednesday|thursday|friday|anytime|lets|go ahead|do it|book|schedule|ready|please|i'?m in|for sure)\b/g) || []).length;
   const n = (t.match(/\b(no\b|not\b|don't|bad|hate|doubt|skeptical|tried|waste|expensive|annoyed|cancel|stop|nevermind|not interested)\b/g) || []).length;
   return p > n ? "positive" : n > p ? "negative" : "neutral";
 }
 
 function extractContext(msg: string, session: Session): void {
-  const t = msg.toLowerCase();
+  const t = normalizeInput(msg);
 
   if (!session.businessType) {
     if (/\b(medspa|med spa|aesthetic|botox|filler|laser|skin care|beauty|wellness|cosmetic|clinic)\b/.test(t)) session.businessType = "medspa";
@@ -104,10 +154,10 @@ function extractContext(msg: string, session: Session): void {
   }
 
   const pains: [RegExp, string][] = [
-    [/\b(leads?|clients?|customers?|traffic|inquir|prospects?|generat)\b/, "lead generation"],
+    [/\b(leads?|lead gen|generating leads|get (more )?clients?|get (more )?customers?|traffic|inquir|prospects?)\b/, "lead generation"],
     [/\b(follow.?up|response time|ghost|slow reply|missed calls?)\b/, "follow-up speed"],
-    [/\b(book|appointment|schedul|calendar|no.?show|cancell)\b/, "booking conversion"],
-    [/\b(staff|overwhelm|busy|manual work|automat|save time|bandwidth|manag)\b/, "lead management"],
+    [/\b(booking conversion|no.?show|cancell|appointment)\b/, "booking conversion"],
+    [/\b(manag|managing|management|organize|track|handle|overwhelm|busy|manual|automat|save time|bandwidth)\b/, "lead management"],
     [/\b(review|reputation|rating|google|trust|credib)\b/, "reputation management"],
     [/\b(revenue|sales|grow|scale|profit|income)\b/, "revenue growth"],
   ];
@@ -128,12 +178,14 @@ function extractContext(msg: string, session: Session): void {
   }
 }
 
-function trackTopic(session: Session, intent: Intent, msg: string): void {
-  const t = msg.toLowerCase();
-  const add = (topic: string) => { if (!session.topicsRaised.includes(topic)) session.topicsRaised.push(topic); };
-  if (intent.type !== "general") add(intent.type);
-  if (/\b(roi|return|result|outcome|case study|success)\b/.test(t)) add("roi");
-  if (/\b(compet|vs\b|alternative|other (options?|tools?|platforms?))\b/.test(t)) add("alternatives");
+function extractContact(msg: string, session: Session): void {
+  const email = (msg.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/) || [])[0] || null;
+  const phone = (msg.match(/(\+?1?\s?)?(\(?\d{3}\)?[\s.\-]?\d{3}[\s.\-]?\d{4})/) || [])[0] || null;
+  const name = (msg.match(/\b(?:my name is|i'?m|i am|call me|it'?s|name'?s)\s+([A-Z][a-z]+(?:\s[A-Z][a-z]+)?)/i) || [])[1] || null;
+
+  if (email) session.contactCollected.email = email;
+  if (phone) session.contactCollected.phone = phone;
+  if (name) session.contactCollected.name = name;
 }
 
 function updateScores(session: Session, intent: Intent): void {
@@ -149,29 +201,39 @@ function updateScores(session: Session, intent: Intent): void {
 function transition(session: Session, intent: Intent): void {
   const { state, painPoints, businessType } = session;
 
-  const stateOrder: State[] = ["discovery", "problem_awareness", "education", "consideration", "conversion"];
+  const stateOrder: State[] = ["discovery", "problem_awareness", "education", "consideration", "booking", "contact_capture", "conversion"];
   const currentIndex = stateOrder.indexOf(state);
 
   const map: Record<State, () => State> = {
     discovery: () => {
-      if (intent.bookingIntent || intent.type === "booking") return "conversion";
+      if (intent.bookingIntent) return "booking";
       if (businessType && painPoints.length >= 1) return "consideration";
       if (businessType || painPoints.length >= 1) return "problem_awareness";
       return "discovery";
     },
     problem_awareness: () => {
-      if (intent.bookingIntent || intent.type === "booking") return "conversion";
-      if (intent.sentiment === "positive") return "education";
+      if (intent.bookingIntent) return "booking";
+      if (intent.sentiment === "positive" || intent.isAffirmative) return "consideration";
       return "problem_awareness";
     },
     education: () => {
-      if (intent.bookingIntent || intent.type === "booking") return "conversion";
-      if (intent.sentiment === "positive") return "consideration";
+      if (intent.bookingIntent) return "booking";
+      if (intent.sentiment === "positive" || intent.isAffirmative) return "consideration";
       return "education";
     },
     consideration: () => {
-      if (intent.bookingIntent || intent.sentiment === "positive") return "conversion";
+      if (intent.bookingIntent || intent.isAffirmative) return "booking";
       return "consideration";
+    },
+    booking: () => {
+      const hasAllContact = session.contactCollected.email || session.contactCollected.phone;
+      if (hasAllContact) return "conversion";
+      return "contact_capture";
+    },
+    contact_capture: () => {
+      const hasAllContact = session.contactCollected.email || session.contactCollected.phone;
+      if (hasAllContact) return "conversion";
+      return "contact_capture";
     },
     conversion: () => "conversion",
   };
@@ -181,61 +243,81 @@ function transition(session: Session, intent: Intent): void {
   session.state = nextIndex >= currentIndex ? next : state;
 }
 
+function inferLastAssistantAction(text: string): AssistantAction {
+  const t = text.toLowerCase();
+  if (/what.*(kind|type).*(business|industry|do you run|do you do)/i.test(t)) return "asked_business_type";
+  if (/what.*(challeng|struggl|pain|problem|issue|need help)/i.test(t)) return "asked_pain_points";
+  if (/(like to (book|schedule)|want to (book|schedule)|book a (call|time|meeting)|schedule a (call|time|meeting)|set up a (call|time|meeting))/i.test(t)) return "asked_booking_interest";
+  if (/(would you like|want to connect|speak with|talk to|hop on a call|set up a call|book a call)/i.test(t)) return "offered_call";
+  if (/(what (day|time|days|times)|when (work|are you|is good)|availability|prefer.*time)/i.test(t)) return "asked_time_preference";
+  if (/(name|email|phone|number|contact|reach you|put on)/i.test(t)) return "asked_contact_details";
+  if (/(pencil you in|put you down|11|2 pm|am|scheduled for|booked for)/i.test(t)) return "proposed_time";
+  if (/(looking forward|see you|our team will|someone will reach|will be in touch)/i.test(t)) return "confirmed_booking";
+  return "general";
+}
+
 function tone(businessType: string | null): string {
   const tones: Record<string, string> = {
-    medspa: "Warm, unhurried, concierge-level. Clients here value feeling understood. Never clinical, never pushy.",
+    medspa: "Warm, unhurried, concierge-level. Never clinical, never pushy.",
     home_services: "Direct, practical, confident. Busy tradespeople respect straight talk. Cut to what matters fast.",
-    restaurant: "Personable and energetic. These owners are passionate—match their energy.",
-    healthcare: "Calm, professional, empathetic. Lead with trust and specificity.",
-    beauty: "Warm and relatable. These owners care deeply about client relationships.",
-    real_estate: "Sharp and results-oriented. Speed and clarity matter most.",
+    restaurant: "Personable and energetic. Match their passion.",
+    healthcare: "Calm, professional, empathetic. Lead with trust.",
+    beauty: "Warm and relatable. Human-first.",
+    real_estate: "Sharp, results-oriented. Speed and clarity.",
   };
-  return (businessType && tones[businessType]) || "Sharp, warm, and direct. You speak like a trusted advisor—confident without being pushy.";
+  return (businessType && tones[businessType]) || "Sharp, warm, and direct. A trusted advisor—confident without being pushy.";
 }
 
 function buildPrompt(session: Session): string {
-  const { state, engagementLevel, trustScore, messageCount, businessType, painPoints, availabilityMentioned, objections } = session;
+  const { state, engagementLevel, trustScore, messageCount, businessType, painPoints, availabilityMentioned, objections, contactCollected } = session;
 
-  const knownContext = [
+  const knownFacts = [
     businessType ? `- Business type: ${businessType}` : null,
     painPoints.length ? `- Pain points: ${painPoints.join(", ")}` : null,
-    availabilityMentioned ? `- Availability mentioned: ${availabilityMentioned}` : null,
+    availabilityMentioned ? `- Availability they mentioned: ${availabilityMentioned}` : null,
+    contactCollected.name ? `- Their name: ${contactCollected.name}` : null,
+    contactCollected.email ? `- Their email: ${contactCollected.email}` : null,
+    contactCollected.phone ? `- Their phone: ${contactCollected.phone}` : null,
   ].filter(Boolean).join("\n");
 
+  const hasContact = contactCollected.email || contactCollected.phone;
+
   const stageInstructions: Record<State, string> = {
-    discovery: `You don't yet know their business or needs. Ask one clear question to find out. If they already told you in this message, acknowledge it and move forward instead.`,
-    problem_awareness: `You know their situation. Briefly confirm you understand it and signal you can help. Do NOT ask them to restate what they already shared.`,
-    education: `Give 1-2 sentences on how AI automation solves their specific problem. Be concrete. Don't lecture.`,
-    consideration: `They're clearly interested. Stop explaining. Ask for their name and best contact (phone or email) to connect them with the team. One natural ask.`,
-    conversion: `Your only job is booking. If they gave availability, propose a concrete time slot (e.g. "I can put you down for 11 AM — what's the best name, phone, and email for the booking?"). If you already have contact info, confirm someone will reach out. Nothing else.`,
+    discovery: `You don't know their business or needs yet. Ask one clear question to find out. If they told you in this message, acknowledge it and move forward immediately.`,
+    problem_awareness: `You know their situation. Briefly confirm it and signal you can help. Do NOT ask them to restate what they already shared.`,
+    education: `Give 1–2 sentences on how AI automation solves their specific problem. Be concrete, not generic. Create interest, not information overload.`,
+    consideration: `They're engaged. Stop explaining. Ask if they'd like to book a quick call with the team to see how this works for their specific situation.`,
+    booking: availabilityMentioned
+      ? `They've indicated ${availabilityMentioned} works. Propose a specific time (e.g. "I can put you down for ${availabilityMentioned} at 11:00 AM or 2:00 PM") and ask for their name, phone number, and email to confirm it.`
+      : `They want to book. If they gave a day, propose a time. If not, ask what day works and what name/number/email to put on it. Keep it natural and brief.`,
+    contact_capture: hasContact
+      ? `You have some contact info. Ask for whatever is still missing (${!contactCollected.name ? "name, " : ""}${!contactCollected.phone ? "phone, " : ""}${!contactCollected.email ? "email" : ""}). Keep it to one natural ask.`
+      : `You need their contact details to complete the booking. Ask naturally for their name, best phone number, and email. One ask, conversational tone.`,
+    conversion: `Booking is done. Confirm the details warmly and let them know the team will be in touch. Keep it brief and human.`,
   };
 
   return [
-    `You are a concise, human-like assistant for a company that helps local businesses grow with AI-powered automation. Your job: qualify inbound leads and book them for a sales call. You are not a consultant—you are a smart receptionist who moves things forward.`,
+    `You are a concise, human-like assistant for a company that helps local businesses grow with AI-powered automation. Your job: qualify inbound leads and book them for a sales call. You are a smart human receptionist—not a consultant, not a chatbot.`,
     ``,
     `Tone: ${tone(businessType)}`,
     ``,
-    knownContext ? `WHAT YOU ALREADY KNOW:\n${knownContext}\n\nNEVER ask them to repeat this information. Use it in every response.` : `You don't know their business yet. Find out in your first response.`,
+    knownFacts
+      ? `CONFIRMED FACTS ABOUT THIS PERSON (do not ask for this again under any circumstances):\n${knownFacts}`
+      : `You don't know their business yet. Find out first.`,
     ``,
-    `Stage: ${state} | Message #${messageCount} | Engagement: ${engagementLevel} | Trust: ${trustScore}/5`,
-    stageInstructions[state],
-    objections.length ? `They've expressed: ${objections.join(", ")}. Address calmly and briefly before moving forward.` : "",
+    `Conversation stage: ${state} | Message #${messageCount} | Engagement: ${engagementLevel} | Trust: ${trustScore}/5`,
     ``,
-    `Hard rules:`,
-    `- Max 2–3 sentences. Be direct.`,
-    `- Never re-ask for info they already gave.`,
-    `- No filler: no "Absolutely!", "Great question!", "Of course!", "Certainly!"`,
-    `- When they show booking intent or give availability, immediately move to proposing a time and collecting contact info.`,
-    `- Sound like a sharp human, not a bot.`,
+    `What to do right now:\n${stageInstructions[state]}`,
+    objections.length ? `\nThey've expressed concern about: ${objections.join(", ")}. Acknowledge briefly before moving forward.` : "",
+    ``,
+    `Non-negotiable rules:`,
+    `- NEVER ask for information already listed in CONFIRMED FACTS.`,
+    `- NEVER go back to discovery questions after booking intent is confirmed.`,
+    `- If the user said yes to a booking offer, treat it as confirmed booking intent and proceed to scheduling.`,
+    `- Max 2–3 sentences per response.`,
+    `- No filler openers: no "Absolutely!", "Great question!", "Of course!", "Certainly!"`,
+    `- Sound like a sharp, helpful human—not a bot.`,
   ].filter(Boolean).join("\n");
-}
-
-function detectContact(msg: string) {
-  return {
-    email: (msg.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/) || [])[0] || null,
-    phone: (msg.match(/(\+?1?\s?)?(\(?\d{3}\)?[\s.\-]?\d{3}[\s.\-]?\d{4})/) || [])[0] || null,
-    name: (msg.match(/\b(?:my name is|i'?m|i am|call me|it'?s)\s+([A-Z][a-z]+(?:\s[A-Z][a-z]+)?)/i) || [])[1] || null,
-  };
 }
 
 async function fireWebhook(data: Record<string, unknown>): Promise<void> {
@@ -269,23 +351,22 @@ export async function POST(req: Request) {
     session.messageCount++;
     session.lastActive = Date.now();
 
-    const intent = detectIntent(message);
+    const intent = detectIntent(message, session);
 
     if (intent.availabilityMentioned && !session.availabilityMentioned) {
       session.availabilityMentioned = intent.availabilityMentioned;
     }
 
     extractContext(message, session);
+    extractContact(message, session);
     updateScores(session, intent);
-    trackTopic(session, intent, message);
     transition(session, intent);
-
-    const contact = detectContact(message);
-    const hasContact = !!(contact.email || contact.phone);
 
     await fireWebhook({
       sessionId,
-      ...contact,
+      name: session.contactCollected.name,
+      email: session.contactCollected.email,
+      phone: session.contactCollected.phone,
       businessType: session.businessType,
       painPoints: session.painPoints.join(", "),
       state: session.state,
@@ -293,10 +374,10 @@ export async function POST(req: Request) {
       trustScore: session.trustScore,
       messageCount: session.messageCount,
       availabilityMentioned: session.availabilityMentioned,
-      wantsCall: session.state === "conversion" || session.state === "consideration" ? "yes" : "no",
-      needsHuman: session.state === "conversion" ? "yes" : "no",
-      triggerType: hasContact ? "contact_provided" : session.state,
+      wantsCall: ["booking", "contact_capture", "conversion", "consideration"].includes(session.state) ? "yes" : "no",
+      needsHuman: ["booking", "contact_capture", "conversion"].includes(session.state) ? "yes" : "no",
       lastMessage: message,
+      lastAssistantAction: session.lastAssistantAction,
     });
 
     session.history.push({ role: "user", content: message });
@@ -308,14 +389,16 @@ export async function POST(req: Request) {
         { role: "system", content: buildPrompt(session) },
         ...session.history,
       ],
-      temperature: 0.72,
+      temperature: 0.7,
       max_tokens: 200,
-      presence_penalty: 0.4,
-      frequency_penalty: 0.35,
+      presence_penalty: 0.3,
+      frequency_penalty: 0.3,
     });
 
     const reply = completion.choices[0]?.message?.content?.trim();
     if (!reply) return NextResponse.json({ error: "No response" }, { status: 500 });
+
+    session.lastAssistantAction = inferLastAssistantAction(reply);
 
     const q = extractQuestion(reply);
     if (q) session.questionsAsked.push(q);
@@ -330,13 +413,13 @@ export async function POST(req: Request) {
         debug: {
           state: session.state,
           intent,
+          lastAssistantAction: session.lastAssistantAction,
           engagementLevel: session.engagementLevel,
           trustScore: session.trustScore,
           painPoints: session.painPoints,
           businessType: session.businessType,
           availabilityMentioned: session.availabilityMentioned,
-          topicsRaised: session.topicsRaised,
-          questionsAsked: session.questionsAsked,
+          contactCollected: session.contactCollected,
         },
       }),
     });
