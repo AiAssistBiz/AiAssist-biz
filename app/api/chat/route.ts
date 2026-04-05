@@ -43,6 +43,8 @@ interface Session {
   questionsAsked: string[];
   lastAssistantAction: AssistantAction;
   bookingIntentConfirmed: boolean;
+  bookingConfirmed: boolean;
+  proposedTime: string | null;
   availabilityMentioned: string | null;
   contactCollected: { name: string | null; email: string | null; phone: string | null };
   engagementLevel: number;
@@ -72,6 +74,8 @@ function createSession(): Session {
     questionsAsked: [],
     lastAssistantAction: "general",
     bookingIntentConfirmed: false,
+    bookingConfirmed: false,
+    proposedTime: null,
     availabilityMentioned: null,
     contactCollected: { name: null, email: null, phone: null },
     engagementLevel: 0,
@@ -105,7 +109,6 @@ function detectIntent(msg: string, session: Session): Intent {
 
   const affirmativeRe = /^(yes|yeah|yep|yup|sure|okay|ok|absolutely|definitely|sounds good|let'?s do it|let'?s go|do it|i'?m in|please|yes please|of course|go ahead|that works|perfect|great|cool|alright|for sure|sounds great|works for me)\b/;
   const shortAffirmativeRe = /\b(yes|yeah|yep|yup|sure|ok|okay|please|do it|let'?s go|i'?m in)\b/;
-
   const bookingSignalsRe = /\b(book (it|me|a call|a time)|schedule (a call|me|it)|call me|set (it|me) up|sign me up|get started|let'?s talk|set up a call|i'?m ready to (talk|start|book)|yes lets?|let'?s do (monday|tuesday|wednesday|thursday|friday|this|that))\b/;
   const flexibleRe = /\b(anytime|whenever|open all day|flexible|doesn'?t matter|whatever works|any day|all day)\b/;
   const dayRe = /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/;
@@ -126,7 +129,6 @@ function detectIntent(msg: string, session: Session): Intent {
   const flexibleAvailability = flexibleRe.test(t);
   const dayMatch = t.match(dayRe);
   const availabilityMentioned = dayMatch ? dayMatch[0] : null;
-
   const bookingIntent = contextualBookingIntent || explicitBookingIntent || session.bookingIntentConfirmed;
 
   let type: IntentType = "general";
@@ -189,10 +191,19 @@ function extractContext(msg: string, session: Session): void {
 function extractContact(msg: string, session: Session): void {
   const email = (msg.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/) || [])[0] || null;
   const phone = (msg.match(/(\+?1?\s?)?(\(?\d{3}\)?[\s.\-]?\d{3}[\s.\-]?\d{4})/) || [])[0] || null;
-  const name = (msg.match(/\b(?:my name is|i'?m|i am|call me|it'?s|name'?s)\s+([A-Z][a-z]+(?:\s[A-Z][a-z]+)?)/i) || [])[1] || null;
-  if (email) session.contactCollected.email = email;
-  if (phone) session.contactCollected.phone = phone;
-  if (name) session.contactCollected.name = name;
+
+  // Named prefix pattern
+  const namedMatch = msg.match(/\b(?:my name is|i'?m|i am|call me|it'?s|name'?s)\s+([a-zA-Z]+(?:\s[a-zA-Z]+)?)/i);
+  // Bare name pattern: first word(s) before a phone number or email when in contact_capture/booking state
+  const bareNameMatch = !namedMatch && (session.state === "contact_capture" || session.state === "booking" || session.bookingIntentConfirmed)
+    ? msg.match(/^([A-Za-z]+(?:\s[A-Za-z]+)?)\s+(?:\d|\()/)
+    : null;
+
+  const name = namedMatch ? namedMatch[1] : (bareNameMatch ? bareNameMatch[1] : null);
+
+  if (email && !session.contactCollected.email) session.contactCollected.email = email;
+  if (phone && !session.contactCollected.phone) session.contactCollected.phone = phone;
+  if (name && !session.contactCollected.name) session.contactCollected.name = name;
 }
 
 function updateScores(session: Session, intent: Intent): void {
@@ -255,8 +266,8 @@ function inferLastAssistantAction(text: string): AssistantAction {
   if (/(would you like|want to connect|speak with|talk to|hop on a call|set up a call|book a call)/i.test(t)) return "offered_call";
   if (/(what (day|time|days|times)|when (work|are you|is good)|availability|prefer.*time)/i.test(t)) return "asked_time_preference";
   if (/(name|email|phone|number|contact|reach you|put on)/i.test(t)) return "asked_contact_details";
-  if (/(pencil you in|put you down|11|2 pm|:00|am|scheduled for|booked for)/i.test(t)) return "proposed_time";
-  if (/(looking forward|see you|our team will|someone will reach|will be in touch)/i.test(t)) return "confirmed_booking";
+  if (/(pencil you in|put you down|10:00|11:00|2:00|:00 am|:00 pm|scheduled for|booked for)/i.test(t)) return "proposed_time";
+  if (/(looking forward|see you|our team will|someone will reach|will be in touch|you're all set|you're set)/i.test(t)) return "confirmed_booking";
   return "general";
 }
 
@@ -273,21 +284,44 @@ function tone(businessType: string | null): string {
 }
 
 function buildDeterministicReply(session: Session): string | null {
-  const { state, businessType, painPoints, availabilityMentioned, contactCollected, bookingIntentConfirmed } = session;
-  const hasContact = contactCollected.email || contactCollected.phone;
-  const businessSummary = businessType ? businessType.replace("_", " ") : "your business";
-  const painSummary = painPoints.length ? painPoints.join(" and ") : "lead generation and management";
+  const { bookingIntentConfirmed, bookingConfirmed, contactCollected, availabilityMentioned, painPoints, businessType } = session;
 
-  if ((state === "booking" || state === "contact_capture") && bookingIntentConfirmed) {
-    if (hasContact) {
-      return null;
-    }
+  if (bookingConfirmed) return null;
 
-    if (availabilityMentioned) {
-      return `Perfect — ${availabilityMentioned} works. I can put you down for 11:00 AM or 2:00 PM. What's the best name, phone number, and email to put on the booking?`;
-    }
+  const hasPhone = !!contactCollected.phone;
+  const hasEmail = !!contactCollected.email;
+  const hasContact = hasPhone || hasEmail;
+  const hasName = !!contactCollected.name;
 
-    return `I've got you down as a ${businessSummary} looking for help with ${painSummary}. What day works for a quick call, and what's the best name, phone number, and email to use?`;
+  const businessSummary = businessType ? businessType.replace(/_/g, " ") : "your business";
+  const painSummary = painPoints.length ? painPoints.join(" and ") : "your needs";
+  const timeSlot = session.proposedTime || (availabilityMentioned ? `${availabilityMentioned} at 10:00 AM` : null);
+
+  // BOOKING COMPLETE: intent confirmed + contact provided → confirm and close
+  if (bookingIntentConfirmed && hasContact) {
+    const nameGreeting = hasName ? `, ${contactCollected.name}` : "";
+    const timePhrase = timeSlot ? `for ${timeSlot}` : "for the call";
+    const contactDetails = [contactCollected.phone, contactCollected.email].filter(Boolean).join(" and ");
+
+    session.bookingConfirmed = true;
+    session.state = "conversion";
+    session.lastAssistantAction = "confirmed_booking";
+
+    return `Perfect${nameGreeting} — you're all set ${timePhrase}. I've got ${contactDetails} on file. Someone from our team will reach out to help with ${painSummary}.`;
+  }
+
+  // AVAILABILITY GIVEN: propose a time and ask for contact
+  if (bookingIntentConfirmed && !hasContact && availabilityMentioned && !session.proposedTime) {
+    const day = availabilityMentioned.charAt(0).toUpperCase() + availabilityMentioned.slice(1);
+    session.proposedTime = `${availabilityMentioned} at 10:00 AM`;
+    session.lastAssistantAction = "proposed_time";
+    return `${day} works — I can put you down for 10:00 AM. What's the best name, phone number, and email to put on the booking?`;
+  }
+
+  // BOOKING INTENT WITH NO AVAILABILITY YET: ask for day + contact in one shot
+  if (bookingIntentConfirmed && !hasContact && !availabilityMentioned && !session.proposedTime) {
+    session.lastAssistantAction = "asked_time_preference";
+    return `I've got you as a ${businessSummary} looking for help with ${painSummary}. What day works for a quick call, and what name, phone number, and email should I put on it?`;
   }
 
   return null;
@@ -297,28 +331,29 @@ function buildPrompt(session: Session): string {
   const { state, engagementLevel, trustScore, messageCount, businessType, painPoints, availabilityMentioned, objections, contactCollected } = session;
 
   const knownFacts = [
-    businessType ? `- Business type: ${businessType.replace("_", " ")}` : null,
-    painPoints.length ? `- Pain points they stated: ${painPoints.join(", ")}` : null,
-    availabilityMentioned ? `- Availability they mentioned: ${availabilityMentioned}` : null,
-    contactCollected.name ? `- Their name: ${contactCollected.name}` : null,
-    contactCollected.email ? `- Their email: ${contactCollected.email}` : null,
-    contactCollected.phone ? `- Their phone: ${contactCollected.phone}` : null,
+    businessType ? `- Business type: ${businessType.replace(/_/g, " ")}` : null,
+    painPoints.length ? `- Pain points: ${painPoints.join(", ")}` : null,
+    availabilityMentioned ? `- Availability: ${availabilityMentioned}` : null,
+    session.proposedTime ? `- Proposed time: ${session.proposedTime}` : null,
+    contactCollected.name ? `- Name: ${contactCollected.name}` : null,
+    contactCollected.email ? `- Email: ${contactCollected.email}` : null,
+    contactCollected.phone ? `- Phone: ${contactCollected.phone}` : null,
   ].filter(Boolean).join("\n");
 
   const hasContact = contactCollected.email || contactCollected.phone;
 
   const stageInstructions: Record<State, string> = {
-    discovery: `You don't know their business or needs yet. Ask one clear, open question. If they told you in this message, acknowledge it and move forward immediately — do not ask again.`,
-    problem_awareness: `You know their situation. Briefly confirm you understand it and signal you can help. Do NOT re-ask what they already told you.`,
-    education: `Give 1–2 sentences on how AI automation directly solves their stated problem. Be concrete. No generic pitches.`,
-    consideration: `They're engaged. Ask if they'd like to book a quick call with the team to see how this works for their business.`,
+    discovery: `You don't know their business or needs yet. Ask one clear question. If they told you in this message, acknowledge it and move forward immediately.`,
+    problem_awareness: `You know their situation. Confirm it briefly and signal you can help. Do NOT re-ask anything already known.`,
+    education: `Give 1–2 concrete sentences on how AI automation solves their specific problem. No generic pitches.`,
+    consideration: `They're engaged. Ask if they'd like to book a quick call with the team.`,
     booking: availabilityMentioned
-      ? `They said ${availabilityMentioned} works. Propose 11:00 AM or 2:00 PM on that day and ask for their name, phone number, and email to confirm it.`
-      : `They want to book. Ask what day works and what name, phone number, and email to put on the call.`,
+      ? `They said ${availabilityMentioned} works. Propose 10:00 AM on that day and ask for name, phone, and email.`
+      : `They want to book. Ask what day works and get their name, phone, and email in the same message.`,
     contact_capture: hasContact
-      ? `You have some of their contact info. Ask only for what's missing: ${[!contactCollected.name && "name", !contactCollected.phone && "phone", !contactCollected.email && "email"].filter(Boolean).join(", ")}.`
-      : `Ask naturally for their name, best phone number, and email to complete the booking. One ask.`,
-    conversion: `Booking complete. Confirm their details and let them know the team will be in touch shortly. Keep it warm and brief.`,
+      ? `You have partial contact info. Ask only for what's still missing: ${[!contactCollected.name && "name", !contactCollected.phone && "phone", !contactCollected.email && "email"].filter(Boolean).join(", ")}.`
+      : `Ask for their name, best phone number, and email to complete the booking. One natural ask.`,
+    conversion: `Booking is confirmed. Briefly confirm the time and contact details, and let them know the team will reach out.`,
   };
 
   return [
@@ -327,21 +362,22 @@ function buildPrompt(session: Session): string {
     `Tone: ${tone(businessType)}`,
     ``,
     knownFacts
-      ? `CONFIRMED FACTS — DO NOT ASK FOR THESE AGAIN UNDER ANY CIRCUMSTANCES:\n${knownFacts}`
-      : `You don't know their business yet. Find out in this response.`,
+      ? `CONFIRMED FACTS — NEVER ASK FOR THESE AGAIN:\n${knownFacts}`
+      : `You don't know their business yet. Find out first.`,
     ``,
     `Stage: ${state} | Message #${messageCount} | Engagement: ${engagementLevel} | Trust: ${trustScore}/5`,
     ``,
     `Your next move:\n${stageInstructions[state]}`,
-    objections.length ? `\nThey've expressed concern about: ${objections.join(", ")}. Acknowledge once, briefly, then move forward.` : "",
+    objections.length ? `\nThey've expressed concern about: ${objections.join(", ")}. Acknowledge once briefly, then move forward.` : "",
     ``,
     `Hard rules:`,
     `- NEVER ask for anything already in CONFIRMED FACTS.`,
-    `- NEVER restart discovery after booking intent has been expressed.`,
-    `- If the user answered yes to a booking offer, move directly to scheduling and contact capture.`,
-    `- If the user gave availability (like a day), propose a specific time immediately.`,
+    `- NEVER restart discovery after booking intent is confirmed.`,
+    `- If user said yes to a booking offer, proceed directly to scheduling and contact capture.`,
+    `- If user gave availability, propose a time immediately.`,
+    `- Once contact details are provided during booking, CONFIRM the booking — do not ask discovery questions.`,
     `- Max 2–3 sentences. Direct and human.`,
-    `- No filler: no "Absolutely!", "Great question!", "Of course!", "Certainly!"`,
+    `- No filler openers: no "Absolutely!", "Great question!", "Of course!", "Certainly!"`,
   ].filter(Boolean).join("\n");
 }
 
@@ -391,25 +427,6 @@ export async function POST(req: Request) {
     updateScores(session, intent);
     transition(session, intent);
 
-    await fireWebhook({
-      sessionId,
-      name: session.contactCollected.name,
-      email: session.contactCollected.email,
-      phone: session.contactCollected.phone,
-      businessType: session.businessType,
-      painPoints: session.painPoints.join(", "),
-      state: session.state,
-      engagementLevel: session.engagementLevel,
-      trustScore: session.trustScore,
-      messageCount: session.messageCount,
-      availabilityMentioned: session.availabilityMentioned,
-      bookingIntentConfirmed: session.bookingIntentConfirmed,
-      wantsCall: ["booking", "contact_capture", "conversion", "consideration"].includes(session.state) ? "yes" : "no",
-      needsHuman: ["booking", "contact_capture", "conversion"].includes(session.state) ? "yes" : "no",
-      lastMessage: message,
-      lastAssistantAction: session.lastAssistantAction,
-    });
-
     session.history.push({ role: "user", content: message });
     if (session.history.length > 24) session.history = session.history.slice(-24);
 
@@ -419,7 +436,6 @@ export async function POST(req: Request) {
 
     if (deterministicReply) {
       reply = deterministicReply;
-      session.lastAssistantAction = "proposed_time";
     } else {
       const completion = await openai.chat.completions.create({
         model: "gpt-4o",
@@ -438,6 +454,27 @@ export async function POST(req: Request) {
       session.lastAssistantAction = inferLastAssistantAction(reply);
     }
 
+    await fireWebhook({
+      sessionId,
+      name: session.contactCollected.name,
+      email: session.contactCollected.email,
+      phone: session.contactCollected.phone,
+      businessType: session.businessType,
+      painPoints: session.painPoints.join(", "),
+      state: session.state,
+      engagementLevel: session.engagementLevel,
+      trustScore: session.trustScore,
+      messageCount: session.messageCount,
+      availabilityMentioned: session.availabilityMentioned,
+      proposedTime: session.proposedTime,
+      bookingIntentConfirmed: session.bookingIntentConfirmed,
+      bookingConfirmed: session.bookingConfirmed,
+      wantsCall: ["booking", "contact_capture", "conversion", "consideration"].includes(session.state) ? "yes" : "no",
+      needsHuman: ["booking", "contact_capture", "conversion"].includes(session.state) ? "yes" : "no",
+      lastMessage: message,
+      lastAssistantAction: session.lastAssistantAction,
+    });
+
     const q = extractQuestion(reply);
     if (q) session.questionsAsked.push(q);
     if (session.questionsAsked.length > 5) session.questionsAsked = session.questionsAsked.slice(-5);
@@ -453,6 +490,8 @@ export async function POST(req: Request) {
           intent,
           lastAssistantAction: session.lastAssistantAction,
           bookingIntentConfirmed: session.bookingIntentConfirmed,
+          bookingConfirmed: session.bookingConfirmed,
+          proposedTime: session.proposedTime,
           engagementLevel: session.engagementLevel,
           trustScore: session.trustScore,
           painPoints: session.painPoints,
