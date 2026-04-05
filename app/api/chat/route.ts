@@ -52,7 +52,7 @@ interface Session {
   messageCount: number;
   history: Message[];
   lastActive: number;
-  webhookSent: boolean;
+  webhookFiredAt: Set<string>;
 }
 
 const sessionStore = new Map<string, Session>();
@@ -84,7 +84,7 @@ function createSession(): Session {
     messageCount: 0,
     history: [],
     lastActive: Date.now(),
-    webhookSent: false,
+    webhookFiredAt: new Set(),
   };
 }
 
@@ -378,40 +378,49 @@ function buildPrompt(session: Session): string {
   ].filter(Boolean).join("\n");
 }
 
-function shouldSendWebhook(session: Session): boolean {
+function getWebhookTrigger(session: Session): string | null {
   const hasContact = !!(session.contactCollected.email || session.contactCollected.phone);
-  return (
-    session.bookingConfirmed ||
-    hasContact ||
-    session.state === "conversion" ||
-    session.state === "contact_capture"
-  );
+
+  if (session.bookingConfirmed && !session.webhookFiredAt.has("booking_confirmed")) {
+    session.webhookFiredAt.add("booking_confirmed");
+    return "booking_confirmed";
+  }
+  if (hasContact && !session.webhookFiredAt.has("contact_captured")) {
+    session.webhookFiredAt.add("contact_captured");
+    return "contact_captured";
+  }
+  if (session.bookingIntentConfirmed && !session.webhookFiredAt.has("booking_intent")) {
+    session.webhookFiredAt.add("booking_intent");
+    return "booking_intent";
+  }
+  return null;
 }
 
 async function fireWebhook(
   sessionId: string,
   session: Session,
   originalMessage: string,
-  aiReply: string
+  aiReply: string,
+  trigger: string
 ): Promise<void> {
   if (!process.env.GOOGLE_SHEETS_WEBHOOK_URL) {
     console.warn("[webhook] GOOGLE_SHEETS_WEBHOOK_URL not set");
     return;
   }
 
-  const wantsBooking = session.bookingIntentConfirmed ||
-    ["booking", "contact_capture", "conversion", "consideration"].includes(session.state)
-    ? "yes" : "no";
-
-  const needsHuman = ["booking", "contact_capture", "conversion"].includes(session.state) ? "yes" : "no";
-
   const status = session.bookingConfirmed
-    ? "booked"
-    : session.state === "contact_capture" || (session.contactCollected.email || session.contactCollected.phone)
+    ? "booking_confirmed"
+    : (session.contactCollected.email || session.contactCollected.phone)
     ? "contact_captured"
     : session.bookingIntentConfirmed
-    ? "booking_intent"
+    ? "booking_in_progress"
     : "new";
+
+  const wantsBooking = session.bookingIntentConfirmed ||
+    ["booking", "contact_capture", "conversion"].includes(session.state)
+    ? "yes" : "no";
+
+  const needsHuman = session.bookingConfirmed ? "no" : "yes";
 
   const serviceInterest = [
     session.businessType ? session.businessType.replace(/_/g, " ") : null,
@@ -431,6 +440,8 @@ async function fireWebhook(
     wants_booking: wantsBooking,
     needs_human: needsHuman,
     status,
+    scheduled_time: session.proposedTime || "",
+    trigger,
   };
 
   try {
@@ -439,7 +450,7 @@ async function fireWebhook(
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
-    console.log("[webhook] status:", res.status, "| state:", session.state, "| session:", sessionId);
+    console.log(`[webhook] fired (${trigger}) status:`, res.status);
   } catch (err) {
     console.error("[webhook] failed:", err);
   }
@@ -501,8 +512,9 @@ export async function POST(req: Request) {
       session.lastAssistantAction = inferLastAssistantAction(reply);
     }
 
-    if (shouldSendWebhook(session)) {
-      await fireWebhook(sessionId, session, message, reply);
+    const webhookTrigger = getWebhookTrigger(session);
+    if (webhookTrigger) {
+      await fireWebhook(sessionId, session, message, reply, webhookTrigger);
     }
 
     const q = extractQuestion(reply);
@@ -529,6 +541,7 @@ export async function POST(req: Request) {
           availabilityMentioned: session.availabilityMentioned,
           contactCollected: session.contactCollected,
           deterministicReplyUsed: !!deterministicReply,
+          webhookTrigger,
         },
       }),
     });
