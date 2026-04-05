@@ -52,6 +52,7 @@ interface Session {
   messageCount: number;
   history: Message[];
   lastActive: number;
+  webhookSent: boolean;
 }
 
 const sessionStore = new Map<string, Session>();
@@ -83,6 +84,7 @@ function createSession(): Session {
     messageCount: 0,
     history: [],
     lastActive: Date.now(),
+    webhookSent: false,
   };
 }
 
@@ -192,9 +194,7 @@ function extractContact(msg: string, session: Session): void {
   const email = (msg.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/) || [])[0] || null;
   const phone = (msg.match(/(\+?1?\s?)?(\(?\d{3}\)?[\s.\-]?\d{3}[\s.\-]?\d{4})/) || [])[0] || null;
 
-  // Named prefix pattern
   const namedMatch = msg.match(/\b(?:my name is|i'?m|i am|call me|it'?s|name'?s)\s+([a-zA-Z]+(?:\s[a-zA-Z]+)?)/i);
-  // Bare name pattern: first word(s) before a phone number or email when in contact_capture/booking state
   const bareNameMatch = !namedMatch && (session.state === "contact_capture" || session.state === "booking" || session.bookingIntentConfirmed)
     ? msg.match(/^([A-Za-z]+(?:\s[A-Za-z]+)?)\s+(?:\d|\()/)
     : null;
@@ -297,7 +297,6 @@ function buildDeterministicReply(session: Session): string | null {
   const painSummary = painPoints.length ? painPoints.join(" and ") : "your needs";
   const timeSlot = session.proposedTime || (availabilityMentioned ? `${availabilityMentioned} at 10:00 AM` : null);
 
-  // BOOKING COMPLETE: intent confirmed + contact provided → confirm and close
   if (bookingIntentConfirmed && hasContact) {
     const nameGreeting = hasName ? `, ${contactCollected.name}` : "";
     const timePhrase = timeSlot ? `for ${timeSlot}` : "for the call";
@@ -310,7 +309,6 @@ function buildDeterministicReply(session: Session): string | null {
     return `Perfect${nameGreeting} — you're all set ${timePhrase}. I've got ${contactDetails} on file. Someone from our team will reach out to help with ${painSummary}.`;
   }
 
-  // AVAILABILITY GIVEN: propose a time and ask for contact
   if (bookingIntentConfirmed && !hasContact && availabilityMentioned && !session.proposedTime) {
     const day = availabilityMentioned.charAt(0).toUpperCase() + availabilityMentioned.slice(1);
     session.proposedTime = `${availabilityMentioned} at 10:00 AM`;
@@ -318,7 +316,6 @@ function buildDeterministicReply(session: Session): string | null {
     return `${day} works — I can put you down for 10:00 AM. What's the best name, phone number, and email to put on the booking?`;
   }
 
-  // BOOKING INTENT WITH NO AVAILABILITY YET: ask for day + contact in one shot
   if (bookingIntentConfirmed && !hasContact && !availabilityMentioned && !session.proposedTime) {
     session.lastAssistantAction = "asked_time_preference";
     return `I've got you as a ${businessSummary} looking for help with ${painSummary}. What day works for a quick call, and what name, phone number, and email should I put on it?`;
@@ -381,18 +378,68 @@ function buildPrompt(session: Session): string {
   ].filter(Boolean).join("\n");
 }
 
-async function fireWebhook(data: Record<string, unknown>): Promise<void> {
+function shouldSendWebhook(session: Session): boolean {
+  const hasContact = !!(session.contactCollected.email || session.contactCollected.phone);
+  return (
+    session.bookingConfirmed ||
+    hasContact ||
+    session.state === "conversion" ||
+    session.state === "contact_capture"
+  );
+}
+
+async function fireWebhook(
+  sessionId: string,
+  session: Session,
+  originalMessage: string,
+  aiReply: string
+): Promise<void> {
   if (!process.env.GOOGLE_SHEETS_WEBHOOK_URL) {
     console.warn("[webhook] GOOGLE_SHEETS_WEBHOOK_URL not set");
     return;
   }
+
+  const wantsBooking = session.bookingIntentConfirmed ||
+    ["booking", "contact_capture", "conversion", "consideration"].includes(session.state)
+    ? "yes" : "no";
+
+  const needsHuman = ["booking", "contact_capture", "conversion"].includes(session.state) ? "yes" : "no";
+
+  const status = session.bookingConfirmed
+    ? "booked"
+    : session.state === "contact_capture" || (session.contactCollected.email || session.contactCollected.phone)
+    ? "contact_captured"
+    : session.bookingIntentConfirmed
+    ? "booking_intent"
+    : "new";
+
+  const serviceInterest = [
+    session.businessType ? session.businessType.replace(/_/g, " ") : null,
+    session.painPoints.length ? session.painPoints.join(", ") : null,
+  ].filter(Boolean).join(" — ");
+
+  const payload = {
+    session_id: sessionId,
+    timestamp: new Date().toISOString(),
+    channel: "website",
+    name: session.contactCollected.name || "",
+    phone: session.contactCollected.phone || "",
+    email: session.contactCollected.email || "",
+    service_interest: serviceInterest,
+    original_message: originalMessage,
+    ai_reply: aiReply,
+    wants_booking: wantsBooking,
+    needs_human: needsHuman,
+    status,
+  };
+
   try {
     const res = await fetch(process.env.GOOGLE_SHEETS_WEBHOOK_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...data, timestamp: new Date().toISOString(), source: "ai-chat" }),
+      body: JSON.stringify(payload),
     });
-    console.log("[webhook] status:", res.status);
+    console.log("[webhook] status:", res.status, "| state:", session.state, "| session:", sessionId);
   } catch (err) {
     console.error("[webhook] failed:", err);
   }
@@ -454,26 +501,9 @@ export async function POST(req: Request) {
       session.lastAssistantAction = inferLastAssistantAction(reply);
     }
 
-    await fireWebhook({
-      sessionId,
-      name: session.contactCollected.name,
-      email: session.contactCollected.email,
-      phone: session.contactCollected.phone,
-      businessType: session.businessType,
-      painPoints: session.painPoints.join(", "),
-      state: session.state,
-      engagementLevel: session.engagementLevel,
-      trustScore: session.trustScore,
-      messageCount: session.messageCount,
-      availabilityMentioned: session.availabilityMentioned,
-      proposedTime: session.proposedTime,
-      bookingIntentConfirmed: session.bookingIntentConfirmed,
-      bookingConfirmed: session.bookingConfirmed,
-      wantsCall: ["booking", "contact_capture", "conversion", "consideration"].includes(session.state) ? "yes" : "no",
-      needsHuman: ["booking", "contact_capture", "conversion"].includes(session.state) ? "yes" : "no",
-      lastMessage: message,
-      lastAssistantAction: session.lastAssistantAction,
-    });
+    if (shouldSendWebhook(session)) {
+      await fireWebhook(sessionId, session, message, reply);
+    }
 
     const q = extractQuestion(reply);
     if (q) session.questionsAsked.push(q);
