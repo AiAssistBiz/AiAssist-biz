@@ -632,6 +632,7 @@ async function fireWebhook(
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
+      redirect: "follow",
     });
     console.log(`[webhook] fired (${trigger}) status:`, res.status);
   } catch (err) {
@@ -702,16 +703,9 @@ export async function POST(req: Request) {
     }
 
     const webhookTrigger = getWebhookTrigger(session);
-console.log("[debug] bookingIntentConfirmed:", session.bookingIntentConfirmed);
-console.log("[debug] bookingConfirmed:", session.bookingConfirmed);
-console.log("[debug] contact:", JSON.stringify(session.contactCollected));
-console.log("[debug] webhookTrigger:", webhookTrigger);
-console.log("[debug] webhookFiredAt:", session.webhookFiredAt);
-if (webhookTrigger) {
-  fireWebhook(sessionId, session, message, reply, webhookTrigger).catch((err) =>
-    console.error("[webhook] unhandled error:", err)
-  );
-}
+    if (webhookTrigger) {
+      await fireWebhook(sessionId, session, message, reply, webhookTrigger);
+    }
 
     const q = extractQuestion(reply);
     if (q) session.questionsAsked.push(q);
