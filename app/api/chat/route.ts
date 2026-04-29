@@ -344,7 +344,7 @@ function extractContact(msg: string, session: Session): void {
     // Bare name detection: only if message contains a phone or email alongside it
     // This prevents "how about" or "monday" being treated as names
     const bareNameMatch = !namedMatch && (phone || email)
-      ? msg.match(/^([A-Z][a-z]+(?:\s[A-Z][a-z]+)?)\s/)
+      ? msg.match(/^([A-Z][a-z]+(?:\s[A-Z][a-z]+)?)(?:\s|,)/)
       : null;
 
     name = namedMatch?.[1] ?? bareNameMatch?.[1] ?? null;
