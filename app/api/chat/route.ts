@@ -158,24 +158,27 @@ function detectTimeOfDay(t: string): TimeOfDay {
   if (/\b(afternoon|after lunch|after noon|2pm|3pm|lunchtime|after 1|after 2|after 3|after noon)\b/.test(t)) return "afternoon";
   if (/\b(morning|early|9am|10am|before noon|before lunch)\b/.test(t)) return "morning";
   if (/\b(evening|after work|after 5|after 4|6pm|7pm|5pm)\b/.test(t)) return "evening";
-  // "after 3pm" / "after 3" / "after 4pm" patterns
   if (/after\s+[3-9]\s*(pm)?/.test(t)) return "afternoon";
   return null;
 }
 
-// Extract a specific time like "11:30", "2:30pm", "11am" from message
 function extractSpecificTime(t: string): string | null {
-  // Match "11:30", "2:30 pm", "11am", "2pm" etc — but NOT plain day names
-  const match = t.match(/\b(\d{1,2})(:\d{2})?\s*(am|pm)?\b(?!\s*(monday|tuesday|wednesday|thursday|friday|saturday|sunday))/i);
-  if (!match) return null;
+  const match = t.match(/\b(\d{1,2})(:\d{2})?\s*(am|pm)\b/i);
+  if (!match) {
+    // Match times with minutes only like "3:30" or "11:45"
+    const colonMatch = t.match(/\b(\d{1,2}):(\d{2})\b/);
+    if (!colonMatch) return null;
+    const hour = parseInt(colonMatch[1]);
+    const mins = colonMatch[2];
+    if (hour < 1 || hour > 12) return null;
+    const m = hour < 8 ? "PM" : "AM";
+    return `${hour}:${mins} ${m}`;
+  }
   const hour = parseInt(match[1]);
   const minutes = match[2] ?? ":00";
-  const meridiem = match[3];
-  // Exclude bare numbers that are likely not times (e.g. phone numbers handled elsewhere)
+  const meridiem = match[3].toUpperCase();
   if (hour < 1 || hour > 12) return null;
-  if (!meridiem && !match[2]) return null; // require either am/pm or :mm to be a time
-  const m = meridiem ? meridiem.toUpperCase() : (hour < 8 ? "PM" : "AM");
-  return `${hour}${minutes} ${m}`;
+  return `${hour}${minutes} ${meridiem}`;
 }
 
 function buildTimeSlot(day: string, specificTime: string | null, timeOfDay: TimeOfDay): string {
@@ -287,7 +290,7 @@ function extractContext(msg: string, session: Session): void {
 
   if (!session.businessType) {
     if (/\b(medspa|med spa|aesthetic|botox|filler|laser|skin care|cosmetic|clinic)\b/.test(t)) session.businessType = "medspa";
-    else if (/\b(plumb|plumber|hvac|electrician|electric|roofing|roofer|landscap|lawn|cleaning|pest|handyman|contractor|remodel|painting|painter|carpenter|flooring|gutters?|siding|windows?|doors?|garage|scrap metal|salvage|junk)\b/.test(t)) session.businessType = "home_services";
+    else if (/\b(plumb|plumber|hvac|electrician|electric|roofing|roofer|landscap|lawn|cleaning|pest|handyman|contractor|remodel|painting|painter|carpenter|flooring|gutters?|siding|windows?|doors?|garage|scrap metal|salvage|junk|trash|hauling|waste|demolition)\b/.test(t)) session.businessType = "home_services";
     else if (/\b(restaurant|cafe|food|dining|catering|bar\b|bakery)\b/.test(t)) session.businessType = "restaurant";
     else if (/\b(dental|dentist|orthodont|chiro|physio|therapy|therapist|medical|doctor|urgent care|pharmacy)\b/.test(t)) session.businessType = "healthcare";
     else if (/\b(salon|barber|barbershop|nail|lash|spa\b|massage|wax|beauty|wellness)\b/.test(t)) session.businessType = "beauty";
@@ -300,9 +303,9 @@ function extractContext(msg: string, session: Session): void {
   }
 
   const pains: [RegExp, string][] = [
-    [/\b(leads?|lead gen|generating leads?|get (more )?clients?|get (more )?customers?|traffic|inquir|prospects?|generate more business|more business)\b/, "lead generation"],
+    [/\b(leads?|lead gen|generating leads?|get (more )?clients?|get (more )?customers?|traffic|inquir|prospects?|generate more business|more business|more clients|more customers)\b/, "lead generation"],
     [/\b(manag|managing|management|organize|organiz|track|handle|overwhelm|busy|manual|automat|save time|bandwidth|handling leads?|organizing leads?)\b/, "lead management"],
-    [/\b(follow.?up|response time|ghost|slow reply|missed calls?|manage the phones|phone management)\b/, "follow-up and phone management"],
+    [/\b(follow.?up|response time|ghost|slow reply|missed calls?|manage the phones|phone management|inbound calls|inbound messages|inbound texts|calls and texts|calls emails)\b/, "inbound communication management"],
     [/\b(booking conversion|no.?show|cancell|appointment)\b/, "booking conversion"],
     [/\b(review|reputation|rating|google|trust|credib)\b/, "reputation management"],
     [/\b(revenue|sales|grow|scale|profit|income)\b/, "revenue growth"],
@@ -325,7 +328,6 @@ function extractContext(msg: string, session: Session): void {
 }
 
 function extractContact(msg: string, session: Session): void {
-  // Only extract contact when in booking flow to avoid grabbing irrelevant info
   const inBookingFlow = session.bookingIntentConfirmed ||
     session.state === "booking" ||
     session.state === "contact_capture" ||
@@ -336,21 +338,18 @@ function extractContact(msg: string, session: Session): void {
   const phoneMatch = msg.match(/(\+?1?\s?)?(\(?\d{3}\)?[\s.\-]?\d{3}[\s.\-]?\d{4})/);
   const phone = phoneMatch?.[0] ?? null;
 
-  // Name extraction — only in booking flow to avoid treating day names as names
   let name: string | null = null;
   if (inBookingFlow) {
     const namedMatch = msg.match(/\b(?:my name is|i'?m|i am|call me|it'?s|name'?s)\s+([a-zA-Z]+(?:\s[a-zA-Z]+)?)/i);
 
-    // Bare name detection: only if message contains a phone or email alongside it
-    // This prevents "how about" or "monday" being treated as names
+    // Bare name: only when phone or email is also present in the message
     const bareNameMatch = !namedMatch && (phone || email)
       ? msg.match(/^([A-Z][a-z]+(?:\s[A-Z][a-z]+)?)(?:\s|,)/)
       : null;
 
     name = namedMatch?.[1] ?? bareNameMatch?.[1] ?? null;
 
-    // Reject single common words that aren't names
-    const notAName = /^(monday|tuesday|wednesday|thursday|friday|saturday|sunday|yes|no|how|about|sure|okay|great|perfect|cool|hi|hello|hey)$/i;
+    const notAName = /^(monday|tuesday|wednesday|thursday|friday|saturday|sunday|yes|no|how|about|sure|okay|great|perfect|cool|hi|hello|hey|got|thanks|thank)$/i;
     if (name && notAName.test(name.trim())) name = null;
   }
 
@@ -386,13 +385,15 @@ function transition(session: Session, intent: Intent): void {
   const map: Record<State, () => State> = {
     discovery: () => {
       if (intent.bookingIntent) return "booking";
-      if (businessType && painPoints.length >= 1) return "consideration";
+      // Always require problem_awareness before consideration
       if (businessType || painPoints.length >= 1) return "problem_awareness";
       return "discovery";
     },
     problem_awareness: () => {
       if (intent.bookingIntent) return "booking";
-      if (intent.sentiment === "positive" || intent.isAffirmative) return "consideration";
+      // Only advance to consideration once we have both business type AND pain points
+      if (businessType && painPoints.length >= 1 && (intent.sentiment === "positive" || intent.isAffirmative)) return "consideration";
+      if (businessType && painPoints.length >= 1) return "consideration";
       return "problem_awareness";
     },
     education: () => {
@@ -419,12 +420,12 @@ function transition(session: Session, intent: Intent): void {
 function inferLastAssistantAction(text: string): AssistantAction {
   const t = text.toLowerCase();
   if (/what.*(kind|type).*(business|industry|do you run|do you do)/i.test(t)) return "asked_business_type";
-  if (/what.*(challeng|struggl|pain|problem|issue|need help)/i.test(t)) return "asked_pain_points";
+  if (/what.*(challeng|struggl|pain|problem|issue|need help|looking to improve|hoping to improve)/i.test(t)) return "asked_pain_points";
   if (/(like to (book|schedule)|want to (book|schedule)|book a (call|time|meeting)|schedule a (call|time|meeting)|set up a (call|time|meeting))/i.test(t)) return "asked_booking_interest";
   if (/(would you like|want to connect|speak with|talk to|hop on a call|set up a call|book a call)/i.test(t)) return "offered_call";
   if (/(what (day|time|days|times)|when (work|are you|is good)|availability|prefer.*time)/i.test(t)) return "asked_time_preference";
   if (/(name|email|phone|number|contact|reach you|put on)/i.test(t)) return "asked_contact_details";
-  if (/(pencil you in|put you down|10:00|11:00|2:00|:00 am|:00 pm|scheduled for|booked for)/i.test(t)) return "proposed_time";
+  if (/(pencil you in|put you down|10:00|11:00|2:00|:00 am|:00 pm|scheduled for|booked for|at \d)/i.test(t)) return "proposed_time";
   if (/(looking forward|see you|our team will|someone will reach|will be in touch|you're all set|you're set)/i.test(t)) return "confirmed_booking";
   return "general";
 }
@@ -460,7 +461,7 @@ function buildDeterministicReply(session: Session, intent: Intent): string | nul
   const businessDisplay = getBusinessDisplay(session);
   const painSummary = painPoints.length ? painPoints.join(" and ") : null;
 
-  // Booking complete — MUST be checked first before any time logic
+  // ── Booking complete — checked FIRST before any time logic ──
   if (session.bookingIntentConfirmed && hasValidContact) {
     const time = session.confirmedTime ?? session.proposedTime ?? null;
     const nameGreeting = displayName ? `, ${displayName}` : "";
@@ -475,16 +476,19 @@ function buildDeterministicReply(session: Session, intent: Intent): string | nul
     return `You're all set${nameGreeting}${timePart}. I've got ${contactParts} on file — someone from our team will be in touch to help${topicPart}.`;
   }
 
-  // Time correction — only when no contact yet
+  // ── Time correction — only when no contact yet ──
   if (session.proposedTime && !hasValidContact && (intent.requestingLaterTime || intent.specificTime || intent.timeOfDay)) {
     const day = availabilityMentioned ?? session.proposedTime.split(" ")[0].toLowerCase();
     const newSlot = buildTimeSlot(day, intent.specificTime, intent.timeOfDay);
-    session.proposedTime = newSlot;
-    session.lastAssistantAction = "proposed_time";
-    return `${newSlot} works — what's the best name, phone number, and email to put on the booking?`;
+    // Only update if the slot actually changed
+    if (newSlot !== session.proposedTime) {
+      session.proposedTime = newSlot;
+      session.lastAssistantAction = "proposed_time";
+      return `${newSlot} works — what's the best name, phone number, and email to put on the booking?`;
+    }
   }
 
-  // Affirmative after proposed time — lock it in as confirmedTime
+  // ── Affirmative after proposed time — lock it in ──
   if (
     session.proposedTime &&
     !session.confirmedTime &&
@@ -494,43 +498,39 @@ function buildDeterministicReply(session: Session, intent: Intent): string | nul
   ) {
     session.confirmedTime = session.proposedTime;
     session.lastAssistantAction = "asked_contact_details";
-    return `${session.confirmedTime} it is. What's the best name, phone number, and email to put on the booking?`;
+    return `${session.confirmedTime} it is. What's your name, phone number, and email so I can lock it in?`;
   }
 
-  // Partial contact — missing email
-  if (session.bookingIntentConfirmed && (hasPhone || hasName) && !hasEmail) {
+  // ── Partial contact — phone only, no email, no name ──
+  if (session.bookingIntentConfirmed && hasPhone && !hasEmail && !hasName) {
     const time = session.confirmedTime ?? session.proposedTime ?? "the call";
-    const haveParts = [displayName, contactCollected.phone].filter(Boolean).join(" and ");
     session.lastAssistantAction = "asked_contact_details";
-    return `Got ${haveParts} for ${time}. What's the best email to put on the booking?`;
+    return `Got ${contactCollected.phone} for ${time}. What's your name and best email to put on the booking?`;
   }
 
-  // Partial contact — missing phone
+  // ── Partial contact — phone only, no email, has name ──
+  if (session.bookingIntentConfirmed && hasPhone && !hasEmail && hasName) {
+    const time = session.confirmedTime ?? session.proposedTime ?? "the call";
+    session.lastAssistantAction = "asked_contact_details";
+    return `Got ${displayName} and ${contactCollected.phone} for ${time}. What's the best email to include?`;
+  }
+
+  // ── Partial contact — email only, no phone ──
   if (session.bookingIntentConfirmed && hasEmail && !hasPhone) {
     const time = session.confirmedTime ?? session.proposedTime ?? "the call";
     session.lastAssistantAction = "asked_contact_details";
     return `Got ${contactCollected.email} for ${time}. What's the best phone number to include?`;
   }
 
-  // Availability given — propose correct time slot
+  // ── Availability given — propose time slot ──
   if (session.bookingIntentConfirmed && !hasValidContact && availabilityMentioned && !session.proposedTime) {
     const slot = buildTimeSlot(availabilityMentioned, intent.specificTime, intent.timeOfDay);
     session.proposedTime = slot;
     session.lastAssistantAction = "proposed_time";
-    return `${slot} works — what's the best name, phone number, and email to put on the booking?`;
+    return `${slot} works — what's your name, phone number, and email so I can get it on the books?`;
   }
 
-  // Booking intent confirmed but no availability yet
-  if (session.bookingIntentConfirmed && !hasValidContact && !availabilityMentioned && !session.proposedTime) {
-    const topicPart = painSummary ? `help with ${painSummary}` : `grow your ${businessDisplay}`;
-    session.lastAssistantAction = "asked_time_preference";
-    return `Let's get that set up. What day works for a quick call to ${topicPart}? Drop your name, phone number, and email too and I'll get it on the books.`;
-  }
-
-  return null;
-}
-
-  // Booking intent confirmed but no availability yet
+  // ── Booking intent confirmed — no availability yet ──
   if (session.bookingIntentConfirmed && !hasValidContact && !availabilityMentioned && !session.proposedTime) {
     const topicPart = painSummary ? `help with ${painSummary}` : `grow your ${businessDisplay}`;
     session.lastAssistantAction = "asked_time_preference";
@@ -567,13 +567,13 @@ function buildPrompt(session: Session): string {
     .join("\n");
 
   const stageInstructions: Record<State, string> = {
-    discovery: `You don't know their business or needs yet. Ask one clear, conversational question. If they just told you their business type, acknowledge it naturally and ask what they're looking to improve.`,
-    problem_awareness: `You know their situation. Acknowledge it briefly in your own words — don't repeat their exact words back. Signal that you can help and move toward booking.`,
-    education: `Give one concrete, specific sentence about how AI automation solves their problem. No generic pitches. Make it feel relevant to their business.`,
-    consideration: `They're engaged and qualified. Ask if they'd like to set up a quick call with the team. Keep it casual and low-pressure.`,
+    discovery: `You don't know their business or needs yet. Ask one clear question. If they just told you their business type, acknowledge it and ask what they're looking to improve — don't offer a call yet.`,
+    problem_awareness: `You know their business type. Ask what specific challenges they're facing or what they're hoping to improve. Do NOT offer a call yet — you need to understand their pain points first.`,
+    education: `Give one concrete sentence about how AI automation solves their specific problem. No generic pitches.`,
+    consideration: `They're qualified. Ask if they'd like to set up a quick call with the team. Keep it casual.`,
     booking: availabilityMentioned
       ? `They said ${availabilityMentioned} works. Propose a specific time and ask for name, phone, and email in the same message.`
-      : `They want to book. Ask what day works and get their name, phone, and email in the same message. Keep it short.`,
+      : `They want to book. Ask what day works and get their name, phone, and email in the same message.`,
     contact_capture:
       hasPhone || hasEmail
         ? `You have partial contact info. Ask only for what's still missing: ${[!contactCollected.name && "name", !hasPhone && "phone", !hasEmail && "email"].filter(Boolean).join(", ")}.`
@@ -599,12 +599,14 @@ function buildPrompt(session: Session): string {
     `- NEVER re-ask anything already in CONFIRMED FACTS.`,
     `- NEVER use internal labels like "beauty", "home_services", "your business", or "your needs" — always use the natural name.`,
     `- NEVER use filler openers: no "Absolutely!", "Great question!", "Of course!", "Certainly!", "That's great!", "I understand".`,
+    `- NEVER offer a call or ask for contact info during discovery or problem_awareness stages.`,
     `- NEVER restart the discovery flow after booking intent is confirmed.`,
     `- NEVER treat a day name, time, or common word as a person's name.`,
-    `- If user gives a specific time like "11:30" or "after 3", use that exact time — don't revert to a default slot.`,
+    `- Always ask for name AND phone AND email together when collecting contact info.`,
+    `- If user gives a specific time like "3:30" or "after 3", use that exact time.`,
     `- Once contact details are provided, CONFIRM the booking immediately.`,
     `- Do NOT confirm booking until you have at least a phone number or valid email.`,
-    `- A valid email must contain @ and a proper domain. A domain name alone is not a valid email.`,
+    `- A valid email must contain @ and a proper domain. A domain name alone is not valid.`,
     `- Max 2–3 sentences. Sound like a real person texting, not a customer service bot.`,
   ]
     .filter(Boolean)
@@ -664,7 +666,6 @@ async function fireWebhook(
     .filter(Boolean)
     .join(" — ");
 
-  // Use the first message the user sent as originalMessage for context
   const messageToLog = session.firstMessageText ?? originalMessage;
 
   const payload = {
@@ -719,7 +720,6 @@ export async function POST(req: Request) {
     session.messageCount++;
     session.lastActive = Date.now();
 
-    // Store first user message for webhook logging context
     if (!session.firstMessageText) {
       session.firstMessageText = message;
     }
