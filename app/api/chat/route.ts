@@ -460,8 +460,23 @@ function buildDeterministicReply(session: Session, intent: Intent): string | nul
   const businessDisplay = getBusinessDisplay(session);
   const painSummary = painPoints.length ? painPoints.join(" and ") : null;
 
-  // Time correction — user is pushing back on proposed time
-  if (session.proposedTime && (intent.requestingLaterTime || intent.specificTime || intent.timeOfDay) && !hasValidContact) {
+  // Booking complete — MUST be checked first before any time logic
+  if (session.bookingIntentConfirmed && hasValidContact) {
+    const time = session.confirmedTime ?? session.proposedTime ?? null;
+    const nameGreeting = displayName ? `, ${displayName}` : "";
+    const contactParts = [contactCollected.phone, contactCollected.email].filter(Boolean).join(" and ");
+    const timePart = time ? ` for ${time}` : "";
+    const topicPart = painSummary ? ` with ${painSummary}` : ` for ${businessDisplay}`;
+
+    session.bookingConfirmed = true;
+    session.state = "conversion";
+    session.lastAssistantAction = "confirmed_booking";
+
+    return `You're all set${nameGreeting}${timePart}. I've got ${contactParts} on file — someone from our team will be in touch to help${topicPart}.`;
+  }
+
+  // Time correction — only when no contact yet
+  if (session.proposedTime && !hasValidContact && (intent.requestingLaterTime || intent.specificTime || intent.timeOfDay)) {
     const day = availabilityMentioned ?? session.proposedTime.split(" ")[0].toLowerCase();
     const newSlot = buildTimeSlot(day, intent.specificTime, intent.timeOfDay);
     session.proposedTime = newSlot;
@@ -480,21 +495,6 @@ function buildDeterministicReply(session: Session, intent: Intent): string | nul
     session.confirmedTime = session.proposedTime;
     session.lastAssistantAction = "asked_contact_details";
     return `${session.confirmedTime} it is. What's the best name, phone number, and email to put on the booking?`;
-  }
-
-  // Booking complete — confirm with correct locked time
-  if (session.bookingIntentConfirmed && hasValidContact) {
-    const time = session.confirmedTime ?? session.proposedTime ?? null;
-    const nameGreeting = displayName ? `, ${displayName}` : "";
-    const contactParts = [contactCollected.phone, contactCollected.email].filter(Boolean).join(" and ");
-    const timePart = time ? ` for ${time}` : "";
-    const topicPart = painSummary ? ` with ${painSummary}` : ` for ${businessDisplay}`;
-
-    session.bookingConfirmed = true;
-    session.state = "conversion";
-    session.lastAssistantAction = "confirmed_booking";
-
-    return `You're all set${nameGreeting}${timePart}. I've got ${contactParts} on file — someone from our team will be in touch to help${topicPart}.`;
   }
 
   // Partial contact — missing email
@@ -519,6 +519,16 @@ function buildDeterministicReply(session: Session, intent: Intent): string | nul
     session.lastAssistantAction = "proposed_time";
     return `${slot} works — what's the best name, phone number, and email to put on the booking?`;
   }
+
+  // Booking intent confirmed but no availability yet
+  if (session.bookingIntentConfirmed && !hasValidContact && !availabilityMentioned && !session.proposedTime) {
+    const topicPart = painSummary ? `help with ${painSummary}` : `grow your ${businessDisplay}`;
+    session.lastAssistantAction = "asked_time_preference";
+    return `Let's get that set up. What day works for a quick call to ${topicPart}? Drop your name, phone number, and email too and I'll get it on the books.`;
+  }
+
+  return null;
+}
 
   // Booking intent confirmed but no availability yet
   if (session.bookingIntentConfirmed && !hasValidContact && !availabilityMentioned && !session.proposedTime) {
