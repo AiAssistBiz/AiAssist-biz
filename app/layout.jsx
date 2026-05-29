@@ -1,7 +1,5 @@
 import "./globals.css";
-import dynamic from "next/dynamic";
-
-const ChatWidget = dynamic(() => import("../components/ChatWidget"), { ssr: false });
+import Script from "next/script";
 
 export const metadata = {
   title: "AI Assist – ADA Compliance, AI Receptionist, Docs→AI",
@@ -13,7 +11,13 @@ export default function RootLayout({ children }) {
     <html lang="en">
       <body className="min-h-screen bg-black text-white">
         {children}
-        <ChatWidget />
+        <Script
+          src="https://widgets.leadconnectorhq.com/loader.js"
+          data-resources-url="https://widgets.leadconnectorhq.com/chat-widget/loader.js"
+          data-widget-id="6a1885fb1ce15bb9e9813833"
+          data-source="WEB_USER"
+          strategy="afterInteractive"
+        />
       </body>
     </html>
   );
