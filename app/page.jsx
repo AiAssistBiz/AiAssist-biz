@@ -217,6 +217,10 @@ function BookingModal({ onClose }) {
               <label style={labelStyle}>Phone Number</label>
               <input style={inputStyle} value={form.phone} onChange={set("phone")} placeholder="(916) 555-0100" type="tel"
                 onFocus={e => (e.target.style.borderColor = `${BLUE}66`)} onBlur={e => (e.target.style.borderColor = "#0d2030")} />
+              <p style={{ fontSize: 11, color: "#444", marginTop: 6, lineHeight: 1.6 }}>
+                By providing your phone number, you consent to receive SMS messages from AI Assist. Message and data rates may apply. Reply STOP to unsubscribe. View our{" "}
+                <a href="/privacy" style={{ color: BLUE_DIM, textDecoration: "underline" }}>Privacy Policy</a>.
+              </p>
             </div>
             <div>
               <label style={labelStyle}>Email Address</label>
@@ -672,12 +676,15 @@ export default function LuxuryLandingPage() {
           <div style={{ width: 6, height: 6, background: BLUE, transform: "rotate(45deg)" }} />
           <span style={{ fontSize: 14, letterSpacing: "0.12em", color: "#333" }}>AI ASSIST</span>
         </div>
-        <p style={{ fontSize: 11, letterSpacing: "0.1em", color: "#0e2235", textTransform: "uppercase", textAlign: "center" }}>
-          © 2026 AI Assist · All Rights Reserved
-        </p>
+        <div style={{ textAlign: "center" }}>
+          <p style={{ fontSize: 11, color: "#333", marginBottom: 4 }}>Sacramento, CA · hello@aiassist.biz · (916) 000-0000</p>
+          <p style={{ fontSize: 11, letterSpacing: "0.1em", color: "#0e2235", textTransform: "uppercase" }}>
+            © 2026 AI Assist · All Rights Reserved
+          </p>
+        </div>
         <div className="flex gap-6">
-          {["Privacy", "Terms", "Contact"].map(item => (
-            <a key={item} href="#"
+          {[["Privacy", "/privacy"], ["Terms", "/terms"], ["Contact", "#"]].map(([item, href]) => (
+            <a key={item} href={href}
               style={{ fontSize: 11, letterSpacing: "0.15em", textTransform: "uppercase", color: "#0e2235", textDecoration: "none", transition: "color 0.3s" }}
               onMouseEnter={e => (e.target.style.color = BLUE)}
               onMouseLeave={e => (e.target.style.color = "#0e2235")}
