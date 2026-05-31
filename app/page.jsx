@@ -6,9 +6,6 @@ const BLUE        = "#00BFFF";
 const BLUE_LIGHT  = "#7DDFFF";
 const BLUE_DIM    = "#0073A8";
 
-const WEBHOOK_URL  = "https://script.google.com/macros/s/AKfycbzUSz7eas1uF3_YVMD3_9XVDIGxxsLlPuHlDC0UVzHTEc80X_PpCXppcO6FsiLSRA/exec";
-const CALENDLY_URL = "https://calendly.com/frontdesk-aiassist/med-spa-consultation";
-
 // ── Utilities ────────────────────────────────────────────────
 
 function useFadeIn() {
@@ -90,173 +87,6 @@ function BlueButton({ children, secondary = false, onClick, fullWidth = false })
     >
       {children}
     </button>
-  );
-}
-
-// ── Booking Modal ────────────────────────────────────────────
-
-function BookingModal({ onClose }) {
-  const [step, setStep]      = useState("form");
-  const [submitting, setSub] = useState(false);
-  const [error, setError]    = useState("");
-  const [form, setForm]      = useState({
-    firstName: "", lastName: "", businessName: "",
-    website: "", phone: "", email: "",
-  });
-
-  useEffect(() => {
-    document.body.style.overflow = "hidden";
-    return () => { document.body.style.overflow = ""; };
-  }, []);
-
-  const set = (k) => (e) => setForm(f => ({ ...f, [k]: e.target.value }));
-  const allFilled = Object.values(form).every(v => v.trim() !== "");
-
-  const handleSubmit = async () => {
-    if (!allFilled || submitting) return;
-    setSub(true);
-    setError("");
-    try {
-      await fetch(WEBHOOK_URL, {
-        method: "POST",
-        mode: "no-cors",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...form, submittedAt: new Date().toISOString() }),
-      });
-      setStep("calendar");
-    } catch {
-      setError("Something went wrong. Please try again.");
-    } finally {
-      setSub(false);
-    }
-  };
-
-  const calendlyEmbed = `${CALENDLY_URL}?embed_type=Inline&hide_event_type_details=1&hide_gdpr_banner=1&name=${encodeURIComponent(form.firstName + " " + form.lastName)}&email=${encodeURIComponent(form.email)}&phone=${encodeURIComponent(form.phone)}`;
-
-  const inputStyle = {
-    width: "100%", background: "#040f1a", border: "1px solid #0d2030",
-    color: "#fff", fontSize: 14, padding: "12px 16px", outline: "none",
-    borderRadius: 6, transition: "border-color 0.2s",
-  };
-  const labelStyle = {
-    display: "block", fontSize: 11, letterSpacing: "0.14em",
-    textTransform: "uppercase", color: "#555", marginBottom: 6,
-  };
-
-  return (
-    <div
-      className="fixed inset-0 z-[100] flex items-center justify-center p-4"
-      style={{ background: "rgba(0,0,0,0.85)", backdropFilter: "blur(8px)" }}
-      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
-    >
-      <div className="relative w-full flex flex-col overflow-hidden"
-        style={{
-          maxWidth: step === "calendar" ? 780 : 560,
-          maxHeight: "90vh",
-          background: "linear-gradient(160deg, #071825, #030d14)",
-          border: "1px solid #0d2030",
-          borderRadius: 16,
-          boxShadow: `0 0 80px rgba(0,191,255,0.08), 0 32px 64px rgba(0,0,0,0.7)`,
-        }}
-      >
-        {[["top-0 left-0","border-t border-l"],["top-0 right-0","border-t border-r"],["bottom-0 left-0","border-b border-l"],["bottom-0 right-0","border-b border-r"]].map(([pos,brd],i) => (
-          <span key={i} className={`absolute ${pos} ${brd} w-5 h-5`} style={{ borderColor: `${BLUE}50` }} />
-        ))}
-
-        {/* Header */}
-        <div className="flex items-center justify-between px-6 py-5" style={{ borderBottom: "1px solid #0d2030" }}>
-          <div>
-            <div className="flex items-center gap-2 mb-1">
-              <div style={{ width: 6, height: 6, background: BLUE, transform: "rotate(45deg)" }} />
-              <span style={{ fontSize: 16, fontWeight: 600, letterSpacing: "0.1em", color: "#fff", textTransform: "uppercase" }}>
-                {step === "form" ? "Get Your Free AI Lead Audit" : "Pick a Time"}
-              </span>
-            </div>
-            <p style={{ fontSize: 12, color: "#0073A8", letterSpacing: "0.05em" }}>
-              {step === "form" ? "Tell us about your business — takes 60 seconds." : "Choose a time that works for you."}
-            </p>
-          </div>
-          <button onClick={onClose} style={{ color: "#555", background: "none", border: "none", cursor: "pointer", padding: 4 }} aria-label="Close">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-              <path d="M18 6L6 18M6 6l12 12" />
-            </svg>
-          </button>
-        </div>
-
-        {/* Progress bar */}
-        <div style={{ height: 2, background: "#0d2030" }}>
-          <div style={{ height: "100%", width: step === "form" ? "50%" : "100%", background: `linear-gradient(90deg, ${BLUE}, ${BLUE_LIGHT})`, transition: "width 0.6s ease" }} />
-        </div>
-
-        {/* Step 1 — Form */}
-        {step === "form" && (
-          <div className="overflow-y-auto px-6 py-6 flex flex-col gap-4">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div>
-                <label style={labelStyle}>First Name</label>
-                <input style={inputStyle} value={form.firstName} onChange={set("firstName")} placeholder="Jane"
-                  onFocus={e => (e.target.style.borderColor = `${BLUE}66`)} onBlur={e => (e.target.style.borderColor = "#0d2030")} />
-              </div>
-              <div>
-                <label style={labelStyle}>Last Name</label>
-                <input style={inputStyle} value={form.lastName} onChange={set("lastName")} placeholder="Smith"
-                  onFocus={e => (e.target.style.borderColor = `${BLUE}66`)} onBlur={e => (e.target.style.borderColor = "#0d2030")} />
-              </div>
-            </div>
-            <div>
-              <label style={labelStyle}>Business Name</label>
-              <input style={inputStyle} value={form.businessName} onChange={set("businessName")} placeholder="Glow Med Spa"
-                onFocus={e => (e.target.style.borderColor = `${BLUE}66`)} onBlur={e => (e.target.style.borderColor = "#0d2030")} />
-            </div>
-            <div>
-              <label style={labelStyle}>Website</label>
-              <input style={inputStyle} value={form.website} onChange={set("website")} placeholder="https://yoursite.com"
-                onFocus={e => (e.target.style.borderColor = `${BLUE}66`)} onBlur={e => (e.target.style.borderColor = "#0d2030")} />
-            </div>
-            <div>
-              <label style={labelStyle}>Phone Number</label>
-              <input style={inputStyle} value={form.phone} onChange={set("phone")} placeholder="(916) 555-0100" type="tel"
-                onFocus={e => (e.target.style.borderColor = `${BLUE}66`)} onBlur={e => (e.target.style.borderColor = "#0d2030")} />
-              <p style={{ fontSize: 11, color: "#444", marginTop: 6, lineHeight: 1.6 }}>
-                By providing your phone number, you consent to receive SMS messages from AI Assist. Message and data rates may apply. Reply STOP to unsubscribe. View our{" "}
-                <a href="/privacy" style={{ color: BLUE_DIM, textDecoration: "underline" }}>Privacy Policy</a>.
-              </p>
-            </div>
-            <div>
-              <label style={labelStyle}>Email Address</label>
-              <input style={inputStyle} value={form.email} onChange={set("email")} placeholder="jane@yoursite.com" type="email"
-                onFocus={e => (e.target.style.borderColor = `${BLUE}66`)} onBlur={e => (e.target.style.borderColor = "#0d2030")} />
-            </div>
-            {error && <p style={{ fontSize: 13, color: "#ff6b6b", textAlign: "center" }}>{error}</p>}
-            <button
-              onClick={handleSubmit}
-              disabled={!allFilled || submitting}
-              style={{
-                marginTop: 8, padding: "15px", borderRadius: 6, width: "100%",
-                background: allFilled && !submitting ? `linear-gradient(135deg, ${BLUE}, ${BLUE_DIM})` : "#0d2030",
-                color: allFilled && !submitting ? "#020d14" : "#333",
-                border: "none", fontSize: 13, fontWeight: 700,
-                letterSpacing: "0.16em", textTransform: "uppercase",
-                cursor: allFilled && !submitting ? "pointer" : "not-allowed", transition: "all 0.3s",
-              }}
-            >
-              {submitting ? "Saving your info..." : "Continue to Scheduling →"}
-            </button>
-            <p style={{ fontSize: 11, color: "#1a3a52", textAlign: "center", letterSpacing: "0.08em" }}>
-              Your info goes directly to our team. No spam, ever.
-            </p>
-          </div>
-        )}
-
-        {/* Step 2 — Calendly */}
-        {step === "calendar" && (
-          <div className="flex-1 overflow-hidden" style={{ minHeight: 600 }}>
-            <iframe src={calendlyEmbed} width="100%" height="100%" frameBorder="0"
-              style={{ minHeight: 600, display: "block" }} title="Schedule your consultation" />
-          </div>
-        )}
-      </div>
-    </div>
   );
 }
 
@@ -346,13 +176,10 @@ function ServiceCard({ title, subtitle, bullets, delay }) {
 // ── Page ─────────────────────────────────────────────────────
 
 export default function LuxuryLandingPage() {
-  const [scrolled,   setScrolled]  = useState(false);
-  const [mounted,    setMounted]   = useState(false);
-  const [menuOpen,   setMenuOpen]  = useState(false);
-  const [showModal,  setShowModal] = useState(false);
-  const [chatReady,  setChatReady] = useState(false);
+  const [scrolled,  setScrolled] = useState(false);
+  const [mounted,   setMounted]  = useState(false);
+  const [menuOpen,  setMenuOpen] = useState(false);
 
-  // Section refs for nav scroll
   const aboutRef    = useRef(null);
   const servicesRef = useRef(null);
   const resultsRef  = useRef(null);
@@ -362,26 +189,16 @@ export default function LuxuryLandingPage() {
     setMounted(true);
     const onScroll = () => setScrolled(window.scrollY > 40);
     window.addEventListener("scroll", onScroll);
-
-    // Wait for Widget to mount before allowing chat open
-    const timer = setTimeout(() => setChatReady(true), 1500);
-    return () => {
-      window.removeEventListener("scroll", onScroll);
-      clearTimeout(timer);
-    };
+    return () => window.removeEventListener("scroll", onScroll);
   }, []);
 
   const openChat = () => {
-    const btn = document.querySelector("[aria-label='Toggle chat']");
-    if (btn) {
-      btn.click();
-    } else {
-      // fallback: try after short delay in case widget hasn't mounted yet
-      setTimeout(() => {
-        const retryBtn = document.querySelector("[aria-label='Toggle chat']");
-        if (retryBtn) retryBtn.click();
-      }, 500);
-    }
+    const btn =
+      document.querySelector("[data-testid='chat-widget-button']") ||
+      document.querySelector(".lc-chat-widget-toggle") ||
+      document.querySelector("[class*='chat-widget'] button") ||
+      document.querySelector("[class*='leadconnector'] button");
+    if (btn) btn.click();
   };
 
   const scrollTo = (ref) => {
@@ -391,8 +208,6 @@ export default function LuxuryLandingPage() {
 
   return (
     <div style={{ background: "#030d14", minHeight: "100vh" }}>
-
-      {showModal && <BookingModal onClose={() => setShowModal(false)} />}
 
       {mounted && (
         <style>{`
@@ -442,13 +257,12 @@ export default function LuxuryLandingPage() {
             ))}
           </div>
           <div className="hidden md:block">
-            <button onClick={() => setShowModal(true)} style={{
+            <button onClick={openChat} style={{
               letterSpacing: "0.16em", fontSize: 12, textTransform: "uppercase", fontWeight: 600,
               padding: "10px 28px", background: `linear-gradient(135deg, ${BLUE}, ${BLUE_DIM})`,
               color: "#020d14", border: "none", cursor: "pointer", borderRadius: 2,
             }}>Get Started</button>
           </div>
-          {/* Hamburger */}
           <button className="md:hidden flex flex-col gap-1.5 p-2" onClick={() => setMenuOpen(o => !o)} aria-label="Toggle menu">
             <span style={{ display: "block", width: 22, height: 1.5, background: menuOpen ? BLUE : "#888", transition: "all 0.3s", transform: menuOpen ? "rotate(45deg) translate(2px, 4px)" : "none" }} />
             <span style={{ display: "block", width: 22, height: 1.5, background: menuOpen ? BLUE : "#888", opacity: menuOpen ? 0 : 1, transition: "all 0.3s" }} />
@@ -462,7 +276,7 @@ export default function LuxuryLandingPage() {
                 style={{ fontSize: 13, letterSpacing: "0.18em", textTransform: "uppercase", color: "#888", background: "none", border: "none", cursor: "pointer", textAlign: "left" }}
               >{label}</button>
             ))}
-            <button onClick={() => { setMenuOpen(false); setShowModal(true); }} style={{
+            <button onClick={() => { setMenuOpen(false); openChat(); }} style={{
               marginTop: 8, letterSpacing: "0.16em", fontSize: 12, textTransform: "uppercase", fontWeight: 600,
               padding: "14px", background: `linear-gradient(135deg, ${BLUE}, ${BLUE_DIM})`,
               color: "#020d14", border: "none", cursor: "pointer", width: "100%", borderRadius: 2,
@@ -503,7 +317,7 @@ export default function LuxuryLandingPage() {
               </ul>
             </div>
             <div className="hero-ctas flex flex-col sm:flex-row gap-3">
-              <BlueButton onClick={() => setShowModal(true)} fullWidth>Get Your Free AI Lead Audit</BlueButton>
+              <BlueButton onClick={openChat} fullWidth>Get Your Free AI Lead Audit</BlueButton>
             </div>
           </div>
           <div className="hero-card hidden sm:block">
@@ -661,7 +475,7 @@ export default function LuxuryLandingPage() {
           </FadeSection>
           <FadeSection delay={280}>
             <div className="flex flex-col sm:flex-row gap-3 justify-center max-w-sm sm:max-w-none mx-auto">
-              <BlueButton onClick={() => setShowModal(true)}>Get Your Free AI Lead Audit</BlueButton>
+              <BlueButton onClick={openChat}>Get Your Free AI Lead Audit</BlueButton>
             </div>
             <p style={{ marginTop: 24, fontSize: 11, letterSpacing: "0.1em", color: "#1a3a52", textTransform: "uppercase" }}>
               No commitment required · Setup this week · Cancel anytime
@@ -677,7 +491,7 @@ export default function LuxuryLandingPage() {
           <span style={{ fontSize: 14, letterSpacing: "0.12em", color: "#333" }}>AI ASSIST</span>
         </div>
         <div style={{ textAlign: "center" }}>
-          <p style={{ fontSize: 11, color: "#333", marginBottom: 4 }}>Sacramento, CA · hello@aiassist.biz · (916) 000-0000</p>
+          <p style={{ fontSize: 11, color: "#333", marginBottom: 4 }}>2108 N St Ste N, Sacramento, CA 95816 · hello@aiassist.biz · (916) 000-0000</p>
           <p style={{ fontSize: 11, letterSpacing: "0.1em", color: "#0e2235", textTransform: "uppercase" }}>
             © 2026 AI Assist · All Rights Reserved
           </p>
