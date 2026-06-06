@@ -6,6 +6,8 @@ const BLUE        = "#00BFFF";
 const BLUE_LIGHT  = "#7DDFFF";
 const BLUE_DIM    = "#0073A8";
 
+const BOOKING_URL = "https://api.leadconnectorhq.com/widget/bookings/ai-assist-demo-call";
+
 // ── Utilities ────────────────────────────────────────────────
 
 function useFadeIn() {
@@ -87,6 +89,80 @@ function BlueButton({ children, secondary = false, onClick, fullWidth = false })
     >
       {children}
     </button>
+  );
+}
+
+// ── Contact Modal ────────────────────────────────────────────
+
+function ContactModal({ onClose }) {
+  useEffect(() => {
+    document.body.style.overflow = "hidden";
+    return () => { document.body.style.overflow = ""; };
+  }, []);
+
+  return (
+    <div
+      className="fixed inset-0 z-[100] flex items-center justify-center p-4"
+      style={{ background: "rgba(0,0,0,0.85)", backdropFilter: "blur(8px)" }}
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div className="relative w-full flex flex-col overflow-hidden"
+        style={{
+          maxWidth: 460,
+          background: "linear-gradient(160deg, #071825, #030d14)",
+          border: "1px solid #0d2030",
+          borderRadius: 16,
+          boxShadow: `0 0 80px rgba(0,191,255,0.08), 0 32px 64px rgba(0,0,0,0.7)`,
+          padding: "40px 36px",
+        }}
+      >
+        {[["top-0 left-0","border-t border-l"],["top-0 right-0","border-t border-r"],["bottom-0 left-0","border-b border-l"],["bottom-0 right-0","border-b border-r"]].map(([pos,brd],i) => (
+          <span key={i} className={`absolute ${pos} ${brd} w-5 h-5`} style={{ borderColor: `${BLUE}50` }} />
+        ))}
+        <button onClick={onClose} style={{ position: "absolute", top: 16, right: 16, color: "#555", background: "none", border: "none", cursor: "pointer" }}>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+            <path d="M18 6L6 18M6 6l12 12" />
+          </svg>
+        </button>
+        <EyebrowLabel>Get In Touch</EyebrowLabel>
+        <h2 style={{ fontSize: 24, fontWeight: 300, color: "#fff", marginBottom: 32, lineHeight: 1.3 }}>
+          We&apos;d love to hear<br />from you.
+        </h2>
+        <div className="flex flex-col gap-6">
+          <div>
+            <p style={{ fontSize: 11, letterSpacing: "0.18em", textTransform: "uppercase", color: "#555", marginBottom: 8 }}>Phone</p>
+            <a href="tel:9164149590" style={{ fontSize: 20, color: "#fff", textDecoration: "none", fontWeight: 300, letterSpacing: "0.05em" }}
+              onMouseEnter={e => (e.target.style.color = BLUE)}
+              onMouseLeave={e => (e.target.style.color = "#fff")}
+            >(916) 414-9590</a>
+          </div>
+          <div style={{ height: 1, background: "#0d2030" }} />
+          <div>
+            <p style={{ fontSize: 11, letterSpacing: "0.18em", textTransform: "uppercase", color: "#555", marginBottom: 8 }}>Email</p>
+            <a href="mailto:frontdesk@aiassist.biz" style={{ fontSize: 18, color: "#fff", textDecoration: "none", fontWeight: 300 }}
+              onMouseEnter={e => (e.target.style.color = BLUE)}
+              onMouseLeave={e => (e.target.style.color = "#fff")}
+            >frontdesk@aiassist.biz</a>
+          </div>
+          <div style={{ height: 1, background: "#0d2030" }} />
+          <div>
+            <p style={{ fontSize: 11, letterSpacing: "0.18em", textTransform: "uppercase", color: "#555", marginBottom: 8 }}>Office</p>
+            <p style={{ fontSize: 14, color: "#666", fontWeight: 300, lineHeight: 1.7 }}>2108 N St Ste N<br />Sacramento, CA 95816</p>
+          </div>
+        </div>
+        <button
+          onClick={() => window.open(BOOKING_URL, "_blank")}
+          style={{
+            marginTop: 32, width: "100%", padding: "15px",
+            background: `linear-gradient(135deg, ${BLUE}, ${BLUE_DIM})`,
+            color: "#020d14", border: "none", fontSize: 13, fontWeight: 700,
+            letterSpacing: "0.16em", textTransform: "uppercase", cursor: "pointer", borderRadius: 6,
+          }}
+        >
+          Book a Demo Call
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -176,14 +252,14 @@ function ServiceCard({ title, subtitle, bullets, delay }) {
 // ── Page ─────────────────────────────────────────────────────
 
 export default function LuxuryLandingPage() {
-  const [scrolled,  setScrolled] = useState(false);
-  const [mounted,   setMounted]  = useState(false);
-  const [menuOpen,  setMenuOpen] = useState(false);
+  const [scrolled,     setScrolled]    = useState(false);
+  const [mounted,      setMounted]     = useState(false);
+  const [menuOpen,     setMenuOpen]    = useState(false);
+  const [showContact,  setShowContact] = useState(false);
 
   const aboutRef    = useRef(null);
   const servicesRef = useRef(null);
   const resultsRef  = useRef(null);
-  const howRef      = useRef(null);
 
   useEffect(() => {
     setMounted(true);
@@ -192,14 +268,7 @@ export default function LuxuryLandingPage() {
     return () => window.removeEventListener("scroll", onScroll);
   }, []);
 
-  const openChat = () => {
-    const btn =
-      document.querySelector("[data-testid='chat-widget-button']") ||
-      document.querySelector(".lc-chat-widget-toggle") ||
-      document.querySelector("[class*='chat-widget'] button") ||
-      document.querySelector("[class*='leadconnector'] button");
-    if (btn) btn.click();
-  };
+  const openBooking = () => window.open(BOOKING_URL, "_blank");
 
   const scrollTo = (ref) => {
     setMenuOpen(false);
@@ -208,6 +277,8 @@ export default function LuxuryLandingPage() {
 
   return (
     <div style={{ background: "#030d14", minHeight: "100vh" }}>
+
+      {showContact && <ContactModal onClose={() => setShowContact(false)} />}
 
       {mounted && (
         <style>{`
@@ -248,16 +319,21 @@ export default function LuxuryLandingPage() {
             <span style={{ fontSize: 18, fontWeight: 500, letterSpacing: "0.12em", color: "#fff" }}>AI ASSIST</span>
           </div>
           <div className="hidden md:flex items-center gap-10">
-            {[["About", aboutRef], ["Services", servicesRef], ["Results", resultsRef], ["Contact", null]].map(([label, ref]) => (
-              <button key={label} onClick={() => ref ? scrollTo(ref) : null}
+            {[["About", aboutRef], ["Services", servicesRef], ["Results", resultsRef]].map(([label, ref]) => (
+              <button key={label} onClick={() => scrollTo(ref)}
                 style={{ fontSize: 12, letterSpacing: "0.18em", textTransform: "uppercase", color: "#666", background: "none", border: "none", cursor: "pointer", transition: "color 0.3s" }}
                 onMouseEnter={e => (e.target.style.color = BLUE)}
                 onMouseLeave={e => (e.target.style.color = "#666")}
               >{label}</button>
             ))}
+            <button onClick={() => setShowContact(true)}
+              style={{ fontSize: 12, letterSpacing: "0.18em", textTransform: "uppercase", color: "#666", background: "none", border: "none", cursor: "pointer", transition: "color 0.3s" }}
+              onMouseEnter={e => (e.target.style.color = BLUE)}
+              onMouseLeave={e => (e.target.style.color = "#666")}
+            >Contact</button>
           </div>
           <div className="hidden md:block">
-            <button onClick={openChat} style={{
+            <button onClick={openBooking} style={{
               letterSpacing: "0.16em", fontSize: 12, textTransform: "uppercase", fontWeight: 600,
               padding: "10px 28px", background: `linear-gradient(135deg, ${BLUE}, ${BLUE_DIM})`,
               color: "#020d14", border: "none", cursor: "pointer", borderRadius: 2,
@@ -271,12 +347,15 @@ export default function LuxuryLandingPage() {
         </div>
         {menuOpen && (
           <div style={{ background: "rgba(3,13,20,0.98)", borderBottom: "1px solid #091a28", padding: "20px 24px 28px" }} className="md:hidden flex flex-col gap-5">
-            {[["About", aboutRef], ["Services", servicesRef], ["Results", resultsRef], ["Contact", null]].map(([label, ref]) => (
-              <button key={label} onClick={() => ref ? scrollTo(ref) : setMenuOpen(false)}
+            {[["About", aboutRef], ["Services", servicesRef], ["Results", resultsRef]].map(([label, ref]) => (
+              <button key={label} onClick={() => scrollTo(ref)}
                 style={{ fontSize: 13, letterSpacing: "0.18em", textTransform: "uppercase", color: "#888", background: "none", border: "none", cursor: "pointer", textAlign: "left" }}
               >{label}</button>
             ))}
-            <button onClick={() => { setMenuOpen(false); openChat(); }} style={{
+            <button onClick={() => { setMenuOpen(false); setShowContact(true); }}
+              style={{ fontSize: 13, letterSpacing: "0.18em", textTransform: "uppercase", color: "#888", background: "none", border: "none", cursor: "pointer", textAlign: "left" }}
+            >Contact</button>
+            <button onClick={() => { setMenuOpen(false); openBooking(); }} style={{
               marginTop: 8, letterSpacing: "0.16em", fontSize: 12, textTransform: "uppercase", fontWeight: 600,
               padding: "14px", background: `linear-gradient(135deg, ${BLUE}, ${BLUE_DIM})`,
               color: "#020d14", border: "none", cursor: "pointer", width: "100%", borderRadius: 2,
@@ -317,7 +396,7 @@ export default function LuxuryLandingPage() {
               </ul>
             </div>
             <div className="hero-ctas flex flex-col sm:flex-row gap-3">
-              <BlueButton onClick={openChat} fullWidth>Get Your Free AI Lead Audit</BlueButton>
+              <BlueButton onClick={openBooking} fullWidth>Book a Free Demo Call</BlueButton>
             </div>
           </div>
           <div className="hero-card hidden sm:block">
@@ -404,7 +483,7 @@ export default function LuxuryLandingPage() {
       </section>
 
       {/* ── HOW IT WORKS ── */}
-      <section ref={howRef} className="px-5 md:px-12 py-16 md:py-24" style={{ background: "#040f1a" }}>
+      <section className="px-5 md:px-12 py-16 md:py-24" style={{ background: "#040f1a" }}>
         <div className="max-w-screen-xl mx-auto">
           <FadeSection>
             <div className="text-center mb-12 md:mb-16">
@@ -475,7 +554,7 @@ export default function LuxuryLandingPage() {
           </FadeSection>
           <FadeSection delay={280}>
             <div className="flex flex-col sm:flex-row gap-3 justify-center max-w-sm sm:max-w-none mx-auto">
-              <BlueButton onClick={openChat}>Get Your Free AI Lead Audit</BlueButton>
+              <BlueButton onClick={openBooking}>Book a Free Demo Call</BlueButton>
             </div>
             <p style={{ marginTop: 24, fontSize: 11, letterSpacing: "0.1em", color: "#1a3a52", textTransform: "uppercase" }}>
               No commitment required · Setup this week · Cancel anytime
@@ -491,15 +570,16 @@ export default function LuxuryLandingPage() {
           <span style={{ fontSize: 14, letterSpacing: "0.12em", color: "#333" }}>AI ASSIST</span>
         </div>
         <div style={{ textAlign: "center" }}>
-          <p style={{ fontSize: 11, color: "#333", marginBottom: 4 }}>2108 N St Ste N, Sacramento, CA 95816 · hello@aiassist.biz · (916) 000-0000</p>
+          <p style={{ fontSize: 11, color: "#333", marginBottom: 4 }}>2108 N St Ste N, Sacramento, CA 95816 · frontdesk@aiassist.biz · (916) 414-9590</p>
           <p style={{ fontSize: 11, letterSpacing: "0.1em", color: "#0e2235", textTransform: "uppercase" }}>
             © 2026 AI Assist · All Rights Reserved
           </p>
         </div>
         <div className="flex gap-6">
-          {[["Privacy", "/privacy"], ["Terms", "/terms"], ["Contact", "#"]].map(([item, href]) => (
-            <a key={item} href={href}
-              style={{ fontSize: 11, letterSpacing: "0.15em", textTransform: "uppercase", color: "#0e2235", textDecoration: "none", transition: "color 0.3s" }}
+          {[["Privacy", "/privacy"], ["Terms", "/terms"], ["Contact", null]].map(([item, href]) => (
+            <a key={item} href={href || "#"}
+              onClick={!href ? (e) => { e.preventDefault(); setShowContact(true); } : undefined}
+              style={{ fontSize: 11, letterSpacing: "0.15em", textTransform: "uppercase", color: "#0e2235", textDecoration: "none", transition: "color 0.3s", cursor: "pointer" }}
               onMouseEnter={e => (e.target.style.color = BLUE)}
               onMouseLeave={e => (e.target.style.color = "#0e2235")}
             >{item}</a>
